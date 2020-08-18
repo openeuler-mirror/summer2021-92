@@ -75,6 +75,13 @@ struct kvm_mmio_decode {
 	int return_handled;
 };
 
+#define KVM_MMU_PAGE_CACHE_NR_OBJS	32
+
+struct kvm_mmu_page_cache {
+	int nobjs;
+	void *objects[KVM_MMU_PAGE_CACHE_NR_OBJS];
+};
+
 struct kvm_cpu_trap {
 	unsigned long sepc;
 	unsigned long scause;
@@ -173,6 +180,9 @@ struct kvm_vcpu_arch {
 
 	/* MMIO instruction details */
 	struct kvm_mmio_decode mmio_decode;
+
+	/* Cache pages needed to program page tables with spinlock held */
+	struct kvm_mmu_page_cache mmu_page_cache;
 
 	/* VCPU power-off state */
 	bool power_off;
