@@ -192,7 +192,7 @@ static int emulate_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			unsigned long fault_addr, unsigned long htinst)
 {
 	unsigned long insn;
-	int shift = 0, len = 0;
+	int shift = 0, len = 0, insn_len = 0;
 	struct kvm_cpu_trap utrap = { 0 };
 	struct kvm_cpu_context *ct = &vcpu->arch.guest_context;
 
@@ -203,6 +203,7 @@ static int emulate_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
 		 * transformed instruction or custom instruction.
 		 */
 		insn = htinst | INSN_16BIT_MASK;
+		insn_len = (htinst & BIT(1)) ? INSN_LEN(insn) : 2;
 	} else {
 		/*
 		 * Bit[0] == 0 implies trapped instruction value is
@@ -216,6 +217,7 @@ static int emulate_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			kvm_riscv_vcpu_trap_redirect(vcpu, &utrap);
 			return 1;
 		}
+		insn_len = INSN_LEN(insn);
 	}
 
 	/* Decode length of MMIO and shift */
@@ -268,6 +270,7 @@ static int emulate_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
 
 	/* Save instruction decode info */
 	vcpu->arch.mmio_decode.insn = insn;
+	vcpu->arch.mmio_decode.insn_len = insn_len;
 	vcpu->arch.mmio_decode.shift = shift;
 	vcpu->arch.mmio_decode.len = len;
 	vcpu->arch.mmio_decode.return_handled = 0;
@@ -290,7 +293,7 @@ static int emulate_store(struct kvm_vcpu *vcpu, struct kvm_run *run,
 	u32 data32;
 	u64 data64;
 	ulong data;
-	int len = 0;
+	int len = 0, insn_len = 0;
 	unsigned long insn;
 	struct kvm_cpu_trap utrap = { 0 };
 	struct kvm_cpu_context *ct = &vcpu->arch.guest_context;
@@ -302,6 +305,7 @@ static int emulate_store(struct kvm_vcpu *vcpu, struct kvm_run *run,
 		 * transformed instruction or custom instruction.
 		 */
 		insn = htinst | INSN_16BIT_MASK;
+		insn_len = (htinst & BIT(1)) ? INSN_LEN(insn) : 2;
 	} else {
 		/*
 		 * Bit[0] == 0 implies trapped instruction value is
@@ -315,6 +319,7 @@ static int emulate_store(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			kvm_riscv_vcpu_trap_redirect(vcpu, &utrap);
 			return 1;
 		}
+		insn_len = INSN_LEN(insn);
 	}
 
 	data = GET_RS2(insn, &vcpu->arch.guest_context);
@@ -356,6 +361,7 @@ static int emulate_store(struct kvm_vcpu *vcpu, struct kvm_run *run,
 
 	/* Save instruction decode info */
 	vcpu->arch.mmio_decode.insn = insn;
+	vcpu->arch.mmio_decode.insn_len = insn_len;
 	vcpu->arch.mmio_decode.shift = 0;
 	vcpu->arch.mmio_decode.len = len;
 	vcpu->arch.mmio_decode.return_handled = 0;
@@ -617,7 +623,7 @@ int kvm_riscv_vcpu_mmio_return(struct kvm_vcpu *vcpu, struct kvm_run *run)
 
 done:
 	/* Move to next instruction */
-	vcpu->arch.guest_context.sepc += INSN_LEN(insn);
+	vcpu->arch.guest_context.sepc += vcpu->arch.mmio_decode.insn_len;
 
 	return 0;
 }

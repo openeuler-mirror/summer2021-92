@@ -74,6 +74,7 @@ struct kvm_arch {
 
 struct kvm_mmio_decode {
 	unsigned long insn;
+	int insn_len;
 	int len;
 	int shift;
 	int return_handled;
