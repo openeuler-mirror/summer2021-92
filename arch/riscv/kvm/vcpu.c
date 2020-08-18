@@ -20,6 +20,9 @@
 #include <asm/csr.h>
 #include <asm/hwcap.h>
 
+#define VCPU_STAT(n, x, ...)						\
+	{ n, offsetof(struct kvm_vcpu, stat.x), KVM_STAT_VCPU, ## __VA_ARGS__ }
+
 struct kvm_stats_debugfs_item debugfs_entries[] = {
 	VCPU_STAT("halt_successful_poll", halt_successful_poll),
 	VCPU_STAT("halt_attempted_poll", halt_attempted_poll),
@@ -148,7 +151,35 @@ int kvm_arch_vcpu_precreate(struct kvm *kvm, unsigned int id)
 	return 0;
 }
 
-int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
+struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm, unsigned int id)
+{
+	int err;
+	struct kvm_vcpu *vcpu;
+
+	vcpu = kmem_cache_zalloc(kvm_vcpu_cache, GFP_KERNEL);
+	if (!vcpu) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	err = kvm_vcpu_init(vcpu, kvm, id);
+	if (err)
+		goto free_vcpu;
+
+	return vcpu;
+
+free_vcpu:
+	kmem_cache_free(kvm_vcpu_cache, vcpu);
+out:
+	return ERR_PTR(err);
+}
+
+int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
+{
+	return 0;
+}
+
+int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *cntx;
 
@@ -172,11 +203,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 	/* Reset VCPU */
 	kvm_riscv_reset_vcpu(vcpu);
 
-	return 0;
-}
-
-int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
-{
 	return 0;
 }
 
@@ -827,13 +853,13 @@ void kvm_arch_vcpu_put(struct kvm_vcpu *vcpu)
 
 static void kvm_riscv_check_vcpu_requests(struct kvm_vcpu *vcpu)
 {
-	struct rcuwait *wait = kvm_arch_vcpu_get_wait(vcpu);
+	struct swait_queue_head *wq = kvm_arch_vcpu_wq(vcpu);
 
 	if (kvm_request_pending(vcpu)) {
 		if (kvm_check_request(KVM_REQ_SLEEP, vcpu)) {
-			rcuwait_wait_event(wait,
-				(!vcpu->arch.power_off) && (!vcpu->arch.pause),
-				TASK_INTERRUPTIBLE);
+			swait_event_interruptible_exclusive(*wq,
+					((!vcpu->arch.power_off) &&
+					(!vcpu->arch.pause)));
 
 			if (vcpu->arch.power_off || vcpu->arch.pause) {
 				/*
@@ -862,11 +888,10 @@ static void kvm_riscv_update_hvip(struct kvm_vcpu *vcpu)
 	csr_write(CSR_HVIP, csr->hvip);
 }
 
-int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
+int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *run)
 {
 	int ret;
 	struct kvm_cpu_trap trap;
-	struct kvm_run *run = vcpu->run;
 
 	/* Mark this VCPU ran at least once */
 	vcpu->arch.ran_atleast_once = true;
