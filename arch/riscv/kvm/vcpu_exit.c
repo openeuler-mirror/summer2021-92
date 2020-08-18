@@ -443,10 +443,11 @@ unsigned long kvm_riscv_vcpu_unpriv_read(struct kvm_vcpu *vcpu,
 	register unsigned long tmp asm("t1");
 	register unsigned long addr asm("t2") = guest_addr;
 	unsigned long flags;
-	unsigned long old_stvec;
+	unsigned long old_stvec, old_hstatus;
 
 	local_irq_save(flags);
 
+	old_hstatus = csr_swap(CSR_HSTATUS, vcpu->arch.guest_context.hstatus);
 	old_stvec = csr_swap(CSR_STVEC, (ulong)&__kvm_riscv_unpriv_trap);
 
 	if (read_insn) {
@@ -518,6 +519,7 @@ unsigned long kvm_riscv_vcpu_unpriv_read(struct kvm_vcpu *vcpu,
 	}
 
 	csr_write(CSR_STVEC, old_stvec);
+	csr_write(CSR_HSTATUS, old_hstatus);
 
 	local_irq_restore(flags);
 

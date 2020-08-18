@@ -200,17 +200,45 @@ static int stage2_set_pte(struct kvm *kvm, u32 level,
 static int stage2_map_page(struct kvm *kvm,
 			   struct kvm_mmu_page_cache *pcache,
 			   gpa_t gpa, phys_addr_t hpa,
-			   unsigned long page_size, pgprot_t prot)
+			   unsigned long page_size,
+			   bool page_rdonly, bool page_exec)
 {
 	int ret;
 	u32 level = 0;
 	pte_t new_pte;
+	pgprot_t prot;
 
 	ret = stage2_page_size_to_level(page_size, &level);
 	if (ret)
 		return ret;
 
+	/*
+	 * A RISC-V implmentation can choose to either:
+	 * 1) Update 'A' and 'D' PTE bits in hardware
+	 * 2) Generate page fault when 'A' and/or 'D' bits are not set
+	 *    PTE so that software can update these bits.
+	 *
+	 * We support both options mentioned above. To achieve this, we
+	 * always set 'A' and 'D' PTE bits at time of creating stage2
+	 * mapping. To support KVM dirty page logging with both options
+	 * mentioned above, we will write-protect stage2 PTEs to track
+	 * dirty pages.
+	 */
+
+	if (page_exec) {
+		if (page_rdonly)
+			prot = PAGE_READ_EXEC;
+		else
+			prot = PAGE_WRITE_EXEC;
+	} else {
+		if (page_rdonly)
+			prot = PAGE_READ;
+		else
+			prot = PAGE_WRITE;
+	}
 	new_pte = pfn_pte(PFN_DOWN(hpa), prot);
+	new_pte = pte_mkdirty(new_pte);
+
 	return stage2_set_pte(kvm, level, pcache, gpa, &new_pte);
 }
 
@@ -705,10 +733,10 @@ int kvm_riscv_stage2_map(struct kvm_vcpu *vcpu,
 		kvm_set_pfn_dirty(hfn);
 		mark_page_dirty(kvm, gfn);
 		ret = stage2_map_page(kvm, pcache, gpa, hfn << PAGE_SHIFT,
-				      vma_pagesize, PAGE_WRITE_EXEC);
+				      vma_pagesize, false, true);
 	} else {
 		ret = stage2_map_page(kvm, pcache, gpa, hfn << PAGE_SHIFT,
-				      vma_pagesize, PAGE_READ_EXEC);
+				      vma_pagesize, true, true);
 	}
 
 	if (ret)
