@@ -4,6 +4,7 @@
 #
 
 source "virt/kvm/Kconfig"
+source "drivers/vhost/Kconfig"
 
 menuconfig VIRTUALIZATION
 	bool "Virtualization"
@@ -26,6 +27,7 @@ config KVM
 	select KVM_MMIO
 	select HAVE_KVM_VCPU_ASYNC_IOCTL
 	select SRCU
+	select HAVE_KVM_EVENTFD
 	help
 	  Support hosting virtualized guest machines.
 
