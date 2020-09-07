@@ -445,8 +445,8 @@ static int kvm_riscv_vcpu_set_reg_csr(struct kvm_vcpu *vcpu,
 
 	if (reg_num == KVM_REG_RISCV_CSR_REG(sip) ||
 	    reg_num == KVM_REG_RISCV_CSR_REG(sie)) {
-		reg_val = reg_val << VSIP_TO_HVIP_SHIFT;
 		reg_val = reg_val & VSIP_VALID_MASK;
+		reg_val = reg_val << VSIP_TO_HVIP_SHIFT;
 	}
 
 	((unsigned long *)csr)[reg_num] = reg_val;
