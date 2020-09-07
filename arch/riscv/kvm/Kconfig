@@ -28,6 +28,7 @@ config KVM
 	select HAVE_KVM_VCPU_ASYNC_IOCTL
 	select SRCU
 	select HAVE_KVM_EVENTFD
+	select KVM_GENERIC_DIRTYLOG_READ_PROTECT
 	help
 	  Support hosting virtualized guest machines.
 
