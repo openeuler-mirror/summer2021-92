@@ -75,10 +75,10 @@ struct kvm_riscv_csr {
 
 /* TIMER registers for KVM_GET_ONE_REG and KVM_SET_ONE_REG */
 struct kvm_riscv_timer {
-	u64 frequency;
-	u64 time;
-	u64 compare;
-	u64 state;
+	__u64 frequency;
+	__u64 time;
+	__u64 compare;
+	__u64 state;
 };
 
 /* Possible states for kvm_riscv_timer */
@@ -110,17 +110,17 @@ struct kvm_riscv_timer {
 /* Timer registers are mapped as type 4 */
 #define KVM_REG_RISCV_TIMER		(0x04 << KVM_REG_RISCV_TYPE_SHIFT)
 #define KVM_REG_RISCV_TIMER_REG(name)	\
-		(offsetof(struct kvm_riscv_timer, name) / sizeof(u64))
+		(offsetof(struct kvm_riscv_timer, name) / sizeof(__u64))
 
 /* F extension registers are mapped as type 5 */
 #define KVM_REG_RISCV_FP_F		(0x05 << KVM_REG_RISCV_TYPE_SHIFT)
 #define KVM_REG_RISCV_FP_F_REG(name)	\
-		(offsetof(struct __riscv_f_ext_state, name) / sizeof(u32))
+		(offsetof(struct __riscv_f_ext_state, name) / sizeof(__u32))
 
 /* D extension registers are mapped as type 6 */
 #define KVM_REG_RISCV_FP_D		(0x06 << KVM_REG_RISCV_TYPE_SHIFT)
 #define KVM_REG_RISCV_FP_D_REG(name)	\
-		(offsetof(struct __riscv_d_ext_state, name) / sizeof(u64))
+		(offsetof(struct __riscv_d_ext_state, name) / sizeof(__u64))
 
 #endif
 
