@@ -75,6 +75,8 @@
 #include "cpupri.h"
 #include "cpudeadline.h"
 
+#include "vip.h"	// Contains vip_policy & task_has_vip_policy
+
 #ifdef CONFIG_SCHED_DEBUG
 # define SCHED_WARN_ON(x)	WARN_ONCE(x, #x)
 #else
@@ -175,6 +177,9 @@ static inline int dl_policy(int policy)
 static inline bool valid_policy(int policy)
 {
 	return idle_policy(policy) || fair_policy(policy) ||
+#ifdef CONFIG_VIP_SCHED
+		vip_policy(policy) ||
+#endif
 		rt_policy(policy) || dl_policy(policy);
 }
 
