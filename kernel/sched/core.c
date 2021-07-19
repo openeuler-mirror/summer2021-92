@@ -4538,8 +4538,16 @@ void set_user_nice(struct task_struct *p, long nice)
 	if (running)
 		put_prev_task(rq, p);
 
-	p->static_prio = NICE_TO_PRIO(nice);
-	set_load_weight(p, true);
+#ifdef	CONFIG_BT_SCHED
+	if (task_has_vip_policy(p)) {
+       p->static_prio = NICE_TO_VIP_PRIO(nice);
+    //    set_vip_load_weight(p);	// my_TODO
+   } else
+#endif
+   {
+       p->static_prio = NICE_TO_PRIO(nice);
+       set_load_weight(p, true);
+   }
 	old_prio = p->prio;
 	p->prio = effective_prio(p);
 	delta = p->prio - old_prio;
@@ -4623,6 +4631,21 @@ int task_prio(const struct task_struct *p)
 }
 
 /**
+ * task_nice - return the nice value of a given task.
+ * @p: the task in question.
+ *
+ * Return: The nice value [ -20 ... 0 ... 19 ].
+ */
+static inline int task_nice(const struct task_struct *p)
+{
+#ifdef CONFIG_SCHED_VIP
+	if (vip_prio(p->static_prio))
+		return TASK_VIP_NICE(p);
+#endif
+	return PRIO_TO_NICE((p)->static_prio);
+}EXPORT_SYMBOL(task_nice);
+
+/**
  * idle_cpu - is a given CPU idle currently?
  * @cpu: the processor in question.
  *
@@ -4701,10 +4724,22 @@ static void __setscheduler_params(struct task_struct *p,
 
 	p->policy = policy;
 
-	if (dl_policy(policy))
+	// Configure new priority to the task `p`
+	if (dl_policy(policy))	// 这个policy是要设置新的policy，此时新的priority还没设置
 		__setparam_dl(p, attr);
 	else if (fair_policy(policy))
 		p->static_prio = NICE_TO_PRIO(attr->sched_nice);
+
+// 等距(VIP_PRIO_WIDTH)移动priority CFS<->VIP
+#ifdef	CONFIG_VIP_SCHED
+	if (unlikely(policy == SCHED_VIP)) {
+		vip_prio_adjust_nega(&p->static_prio);
+		// set_vip_load_weight(p);		// my_TODO
+	} else if (policy == SCHED_NORMAL || policy == SCHED_BATCH ||
+		policy == SCHED_IDLE) {
+		vip_prio_adjust_posi(&p->static_prio);
+	}
+#endif
 
 	/*
 	 * __sched_setscheduler() ensures attr->sched_priority == 0 when
@@ -4741,6 +4776,10 @@ static void __setscheduler(struct rq *rq, struct task_struct *p,
 		p->sched_class = &dl_sched_class;
 	else if (rt_prio(p->prio))
 		p->sched_class = &rt_sched_class;
+#ifdef CONFIG_SCHED_VIP
+	else if (vip_prio(p->prio))
+		p->sched_class = &vip_sched_class;
+#endif
 	else
 		p->sched_class = &fair_sched_class;
 }
@@ -4777,6 +4816,11 @@ static int __sched_setscheduler(struct task_struct *p,
 
 	/* The pi code expects interrupts enabled */
 	BUG_ON(pi && in_interrupt());
+
+
+	if(!sched_vip_on && SCHED_VIP == policy)		// Why? my_TODO
+		return -EINVAL;
+
 recheck:
 	/* Double check policy once rq lock held: */
 	if (policy < 0) {

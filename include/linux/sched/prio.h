@@ -22,8 +22,13 @@
 #define MAX_USER_RT_PRIO	100
 #define MAX_RT_PRIO		MAX_USER_RT_PRIO
 
+#ifdef	CONFIG_VIP_SCHED
+#define MAX_PRIO	(MAX_RT_PRIO + NICE_WIDTH + VIP_PRIO_WIDTH)
+#define DEFAULT_PRIO		(MAX_RT_PRIO + VIP_PRIO_WIDTH + NICE_WIDTH / 2)
+#else
 #define MAX_PRIO		(MAX_RT_PRIO + NICE_WIDTH)
 #define DEFAULT_PRIO		(MAX_RT_PRIO + NICE_WIDTH / 2)
+#endif	/* CONFIG_VIP_SCHED */
 
 /*
  * Convert user-nice values [ -20 ... 0 ... 19 ]
@@ -38,7 +43,8 @@
  * can work with better when scaling various scheduler parameters,
  * it's a [ 0 ... 39 ] range.
  */
-#define USER_PRIO(p)		((p)-MAX_RT_PRIO)
+// FOR CFS TASK SETTING BY SYSCALL `nice`
+#define USER_PRIO(p)		((p)-MAX_VIP_PRIO)
 #define TASK_USER_PRIO(p)	USER_PRIO((p)->static_prio)
 #define MAX_USER_PRIO		(USER_PRIO(MAX_PRIO))
 
