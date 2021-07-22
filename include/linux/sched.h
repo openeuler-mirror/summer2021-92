@@ -472,6 +472,10 @@ struct sched_entity {
 	struct cfs_rq			*my_q;
 #endif
 
+#ifdef CONFIG_VIP_GROUP_SCHED
+// TODO
+#endif
+
 #ifdef CONFIG_SMP
 	/*
 	 * Per entity load average tracking.
@@ -679,6 +683,9 @@ struct task_struct {
 
 	const struct sched_class	*sched_class;
 	struct sched_entity		se;
+#ifdef CONFIG_VIP_SCHED
+	struct sched_entity		vip;
+#endif
 	struct sched_rt_entity		rt;
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
