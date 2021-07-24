@@ -864,6 +864,9 @@ struct rq {
 	 * remote CPUs use both these fields when doing load calculation.
 	 */
 	unsigned int		nr_running;
+#ifdef CONFIG_VIP_SCHED
+	unsigned int vip_nr_running;
+#endif
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned int		nr_numa_running;
 	unsigned int		nr_preferred_running;
@@ -892,6 +895,9 @@ struct rq {
 	struct cfs_rq		cfs;
 	struct rt_rq		rt;
 	struct dl_rq		dl;
+#ifdef CONFIG_VIP_SCHED
+	struct vip_rq		vip;
+#endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this CPU: */
@@ -1655,6 +1661,10 @@ static inline int task_on_rq_migrating(struct task_struct *p)
 #define WF_SYNC			0x01		/* Waker goes to sleep after wakeup */
 #define WF_FORK			0x02		/* Child wakeup after fork */
 #define WF_MIGRATED		0x4		/* Internal use, task got migrated */
+
+extern inline void update_load_add(struct load_weight *lw, unsigned long inc);
+extern inline void update_load_sub(struct load_weight *lw, unsigned long dec);
+extern inline void update_load_set(struct load_weight *lw, unsigned long w);
 
 /*
  * To aid in avoiding the subversion of "niceness" due to uneven distribution
