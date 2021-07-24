@@ -6,7 +6,10 @@
  *
  *  Copyright (C) 1991-2002  Linus Torvalds
  */
+#include <linux/sched/vip.h>
+
 #include "sched.h"
+#include "vip.h"
 
 #include <linux/nospec.h>
 
@@ -2693,6 +2696,15 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.vruntime			= 0;
 	INIT_LIST_HEAD(&p->se.group_node);
 
+#ifdef	CONFIG_VIP_SCHED
+	p->vip.on_rq			= 0;
+	p->vip.exec_start		= 0;
+	p->vip.sum_exec_runtime		= 0;
+	p->vip.prev_sum_exec_runtime	= 0;
+	p->vip.nr_migrations		= 0;
+	p->vip.vruntime			= 0;
+#endif
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	p->se.cfs_rq			= NULL;
 #endif
@@ -2865,7 +2877,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 			p->policy = SCHED_NORMAL;
 			p->static_prio = NICE_TO_PRIO(0);
 			p->rt_priority = 0;
-		} else if (PRIO_TO_NICE(p->static_prio) < 0)
+		} else if (PRIO_TO_NICE(p->static_prio) < 0)	// for VIP & NORMAL task
 			p->static_prio = NICE_TO_PRIO(0);
 
 		p->prio = p->normal_prio = __normal_prio(p);
@@ -2882,6 +2894,10 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 		return -EAGAIN;
 	else if (rt_prio(p->prio))
 		p->sched_class = &rt_sched_class;
+#ifdef CONFIG_VIP_SCHED
+	else if (vip_prio(p->prio))
+		p->sched_class = &vip_sched_class;
+#endif
 	else
 		p->sched_class = &fair_sched_class;
 
@@ -4538,7 +4554,7 @@ void set_user_nice(struct task_struct *p, long nice)
 	if (running)
 		put_prev_task(rq, p);
 
-#ifdef	CONFIG_BT_SCHED
+#ifdef	CONFIG_VIP_SCHED
 	if (task_has_vip_policy(p)) {
        p->static_prio = NICE_TO_VIP_PRIO(nice);
     //    set_vip_load_weight(p);	// my_TODO
@@ -4818,7 +4834,7 @@ static int __sched_setscheduler(struct task_struct *p,
 	BUG_ON(pi && in_interrupt());
 
 
-	if(!sched_vip_on && SCHED_VIP == policy)		// Why? my_TODO
+	if(!sched_vip_on && SCHED_VIP == policy)		// sched_vip_on为动态开启开关，在init/main.c中实现相关功能
 		return -EINVAL;
 
 recheck:
@@ -6686,6 +6702,10 @@ void __init sched_init(void)
 		init_cfs_rq(&rq->cfs);
 		init_rt_rq(&rq->rt);
 		init_dl_rq(&rq->dl);
+#ifdef  CONFIG_VIP_SCHED
+		rq->vip_nr_running = 0;
+		init_vip_rq(&rq->bt);		// vip.c
+#endif
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
