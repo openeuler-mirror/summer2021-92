@@ -30,8 +30,12 @@ void init_vip_rq(struct vip_rq *vip_rq)
 #define vip_entity_is_task(vip)	1
 #endif
 
-#define for_each_sched_vip_entity(vip) \
-		for (; vip; vip = NULL)
+#define for_each_sched_vip_entity(vip_se) \
+		for (; vip_se; vip_se = NULL)
+
+/* Walk up scheduling entities hierarchy */
+#define for_each_sched_vip_entity(vip_se) \
+		for (; vip_se; vip_se = vip_se->parent)
 
 static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
 {
@@ -56,7 +60,10 @@ static inline struct rq *rq_of_vip_rq(struct vip_rq* vip_rq)
 	return container_of(vip_rq, struct rq, vip);
 }
 
-
+static inline struct sched_entity *parent_vip_entity(struct sched_entity *vip_se)
+{
+	return NULL;
+}
 
 /**************************************************************
  * Scheduling class tree data structure manipulation methods:
@@ -75,8 +82,36 @@ static inline int vip_entity_before(struct sched_entity *a,
 static void __enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
 	// 操作红黑树
+	struct rb_node **link = &(vip_rq->tasks_timeline.rb_root.rb_node);
+	struct rb_node *parent = NULL;
+	struct sched_entity *entry;
+	int leftmost = 1;
+
+	while (*link) {
+		parent = *link;
+		entry = rb_entry(parent, struct sched_entity, run_node);
+		/*
+		 * A standard rb-tree should not has same nodes. 
+		 * But we dont care about collisions here. Nodes with
+		 * the same key stay together.
+		 */
+		 if (vip_entity_before(vip_se, entry)) {
+			 link = &parent->rb_left;
+		 } else {
+			 link = &parent->rb_right;
+			 leftmost = 0;
+		 }
+	}
+
+	rb_link_node(&vip_se->run_node, parent, link);
+	rb_insert_color_cached(&vip_se->run_node,
+					&vip_rq->tasks_timeline, leftmost);
 }
 
+static void __dequeue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	rb_erase_cached(&vip_se->run_node, &vip_rq->tasks_timeline);
+}
 
 /*
  * delta /= w
@@ -149,6 +184,7 @@ static u64 sched_vip_vslice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
  * Update the current task's runtime statistics.
  */
 // 更新当前运行任务的 vruntime & viprq的min_vruntime
+// TODO: newest version
 static void update_curr_vip(struct vip_rq *vip_rq)
 {
 	struct sched_entity *curr = vip_rq->curr;
@@ -241,6 +277,53 @@ update_stats_enqueue_vip(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 		update_stats_wait_start_vip(vip_rq, vip_se);
 }
 
+update_stats_wait_end_vip(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	schedstat_set(cip_se->vip_statistics->wait_max,
+			max(vip_se->vip_statistics->wait_max,
+			rq_of_vip_rq(vip_rq)->clock - vip_se->vip_statistics->wait_start));
+	schedstat_set(vip_se->vip_statistics->wait_count,
+			vip_se->vip_statistics->wait_count + 1);
+	schedstat_set(vip_se->vip_statistics->wait_sum,
+			vip_se->vip_statistics->wait_sum +
+			rq_of_vip_rq(vip_rq)->clock - vip_se->vip_statistics->wait_start);
+#ifdef CONFIG_SCHEDSTATS
+	if (vip_entity_is_task(vip_se)) {
+		trace_sched_stat_wait(vip_task_of(vip_se),
+			rq_of_vip_rq(vip_rq)->clock - vip_se->vip_statistics->wait_start);
+	}
+#endif
+	schedstat_set(vip_se->vip_statistics->wait_start, 0);
+}
+
+static inline void
+update_stats_dequeue_vip(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	/*
+	 * Mark the end of the wait period if dequeueing a
+	 * waiting task:
+	 */
+	if (se != vip_rq->curr)
+		update_stats_wait_end_vip(vip_rq, vip_se);
+}
+
+
+static void
+account_vip_entity_enqueue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	update_load_add(&vip_rq->load, vip_se->load.weight);
+
+	vip_rq->nr_running++;
+}
+
+static void
+account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	update_load_sub(&vip_rq->load, vip_se->load.weight);
+
+	vip_rq->nr_running--;
+}
+
 static void check_vip_spread(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
 #ifdef CONFIG_SCHED_DEBUG
@@ -293,6 +376,95 @@ enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int flags
 	
 }
 
+
+static void __clear_buddies_last_vip(struct sched_entity *vip_se)
+{
+	for_each_sched_vip_entity(vip_se) {
+		struct vip_rq *vip_rq = vip_rq_of(vip_se);
+
+		if (vip_rq->last == vip_se)
+			vip_rq->last = NULL;
+		else
+			break;
+	}
+}
+
+static void __clear_buddies_next_vip(struct sched_entity *vip_se)
+{
+	for_each_sched_vip_entity(vip_se) {
+		struct vip_rq *vip_rq = vip_rq_of(vip_se);
+
+		if (vip_rq->next == vip_se)
+			vip_rq->next = NULL;
+		else
+			break;
+	}
+}
+
+static void __clear_buddies_skip_vip(struct sched_entity *vip_se)
+{
+	for_each_sched_vip_entity(vip_se) {
+		struct vip_rq *vip_rq = vip_rq_of(vip_se);
+
+		if (vip_rq->skip == vip_se)
+			vip_rq->skip = NULL;
+		else
+			break;
+	}
+}
+
+static void clear_buddies_vip(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	if (vip_rq->last == vip_se)
+		__clear_buddies_last_vip(vip_se);
+
+	if (vip_rq->next == vip_se)
+		__clear_buddies_next_vip(vip_se);
+
+	if (vip_rq->skip == vip_se)
+		__clear_buddies_skip_vip(vip_se);
+}
+
+static void
+dequeue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int flags)
+{
+	/*
+	 * Update run-time vip_statistics of the 'current'.
+	 */
+	update_curr_vip(vip_rq);
+
+	update_stats_dequeue_vip(vip_rq, vip_se);
+	if (flags & DEQUEUE_SLEEP) {
+#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_LATENCYTOP)
+		if (vip_entity_is_task(vip_se)) {
+			struct task_struct *tsk = vip_task_of(vip_se);
+
+			if (tsk->state & TASK_INTERRUPTIBLE)
+				vip_se->vip_statistics->sleep_start = rq_of_vip_rq(vip_rq)->clock;
+			if (tsk->state & TASK_UNINTERRUPTIBLE)
+				vip_se->vip_statistics->block_start = rq_of_vip_rq(vip_rq)->clock;
+		}
+#endif
+	}
+
+	clear_buddies_vip(vip_rq, vip_se);
+
+	if (vip_se != vip_rq->curr)
+		__dequeue_vip_entity(vip_rq, vip_se);
+	vip_se->on_rq = 0;
+	account_vip_entity_dequeue(vip_rq, vip_se);
+
+	/*
+	 * Normalize the entity after updating the min_vruntime because the
+	 * update can refer to the ->curr item and we need to reflect this
+	 * movement in our normalized position.
+	 */
+	if (!(flags & DEQUEUE_SLEEP))
+		vip_se->vruntime -= vip_rq->min_vruntime;
+
+	update_vip_min_vruntime(vip_rq);
+}
+
 /*
  * The enqueue_task method is called before nr_running is
  * increased. Here we update the vip scheduling stats and
@@ -306,7 +478,7 @@ enqueue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 	struct vip_rq* vip_rq;
 
 	// Key: enqueue_vip_entity
-	for_each_sched_entity(vip_se) {
+	for_each_sched_vip_entity(vip_se) {
 		// 如果已在队列
 		if(vip_se->on_rq)
 			break;
@@ -325,14 +497,54 @@ enqueue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 	}
 }
 
-static void
-account_vip_entity_enqueue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+/*
+ * The dequeue_task_vip method is called before nr_running is
+ * decreased. We remove the task from the rbtree and
+ * update the fair scheduling stats:
+ */
+// TODO
+static void dequeue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 {
-	update_load_add(&vip_rq->load, vip_se->load.weight);
+	struct vip_rq *vip_rq;
+	struct sched_entity *se = &p->vip;
+	int task_sleep = flags & DEQUEUE_SLEEP;
 
-	vip_rq->nr_running++;
+	for_each_sched_vip_entity(se) {
+		vip_rq = vip_rq_of(se);
+		dequeue_vip_entity(vip_rq, se, flags);
+
+		vip_rq->h_nr_running--;
+
+		/* Don't dequeue parent if it has other entities besides us */
+		if (vip_rq->load.weight) {
+			/*
+			 * Bias pick_next to pick a task from this vip_rq, as
+			 * p is sleeping when it is within its sched_slice.
+			 */
+			if (task_sleep && parent_vip_entity(se))
+				set_next_buddy_vip(parent_vip_entity(se));
+
+			/* avoid re-evaluating load for this entity */
+			se = parent_vip_entity(se);
+			break;
+		}
+		flags |= DEQUEUE_SLEEP;
+	}
+
+	if (!se) {
+		sub_nr_running(rq, 1);
+		rq->vip_nr_running--;
+	}
 }
 
+static void set_next_buddy_vip(struct sched_entity *vip_se)
+{
+	if (vip_entity_is_task(vip_se))
+		return;
+
+	for_each_sched_vip_entity(vip_se)
+		vip_rq_of(vip_se)->next = vip_se;
+}
 
 // 完成当前创建的新进程的虚拟时间初始化
 /*
@@ -359,8 +571,8 @@ static void task_fork_vip(struct task_struct *p)
 
 	/*
 	 * Not only the cpu but also the task_group of the parent might have
-	 * been changed after parent->se.parent,cfs_rq were copied to
-	 * child->se.parent,cfs_rq. So call __set_task_cpu() to make those
+	 * been changed after parent->se.parent,vip_rq were copied to
+	 * child->se.parent,vip_rq. So call __set_task_cpu() to make those
 	 * of child point to valid ones.
 	 */
 	rcu_read_lock();
@@ -387,6 +599,17 @@ static void task_fork_vip(struct task_struct *p)
 	raw_spin_unlock_irqrestore(&rq->lock, flags);
 }
 
+// 初始化vip_rq的红黑树 -- start_kernel -> sched_init -> init_vip_rq
+void init_vip_rq(struct vip_rq *vip_rq)
+{
+	vip_rq->tasks_timeline.rb_root = RB_ROOT;
+	vip_rq->tasks_timeline.rb_leftmost = NULL;
+	vip_rq->min_vruntime = (u64)(-(1LL << 20));
+#ifndef CONFIG_64BIT
+	vip_rq->min_vruntime_copy = vip_rq->min_vruntime;
+#endif
+}
+
 /*
  * All the scheduling class methods:
  */
@@ -408,7 +631,7 @@ const struct sched_class vip_sched_class = {
 	// .select_task_rq		= select_task_rq_vip,
 	// .migrate_task_rq	= migrate_task_rq_vip,
 
-	// .rq_online		= rq_online_vip,
+	// .rq_online		= rq_online_vip,		// oneline offline 没必要
 	// .rq_offline		= rq_offline_vip,
 
 	// .task_dead		= task_dead_vip,
