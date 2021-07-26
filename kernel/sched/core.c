@@ -6704,7 +6704,7 @@ void __init sched_init(void)
 		init_dl_rq(&rq->dl);
 #ifdef  CONFIG_VIP_SCHED
 		rq->vip_nr_running = 0;
-		init_vip_rq(&rq->bt);		// vip.c
+		init_vip_rq(&rq->vip);		// vip.c - 初始化vip_rq的红黑树
 #endif
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
