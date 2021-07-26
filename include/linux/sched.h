@@ -462,6 +462,9 @@ struct sched_entity {
 	u64				nr_migrations;
 
 	struct sched_statistics		statistics;
+#ifdef	CONFIG_BT_SCHED
+	struct sched_statistics		*vip_statistics;
+#endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	int				depth;
