@@ -22,12 +22,25 @@ void init_vip_rq(struct vip_rq *vip_rq)
 #endif
 }
 
+#ifdef CONFIG_VIP_GROUP_SCHED
+/* An entity is a task if it doesn't "own" a runqueue */
+#define vip_entity_is_task(vip)	(!vip->my_q)
+
+#else
+#define vip_entity_is_task(vip)	1
+#endif
+
 #define for_each_sched_vip_entity(vip) \
 		for (; vip; vip = NULL)
 
 static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
 {
 	return container_of(vip_se, struct task_struct, vip);
+}
+
+static inline struct vip_rq *task_vip_rq(struct task_struct *p)
+{
+	return &task_rq(p)->vip;
 }
 
 static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
@@ -43,19 +56,32 @@ static inline struct rq *rq_of_vip_rq(struct vip_rq* vip_rq)
 	return container_of(vip_rq, struct rq, vip);
 }
 
-#ifdef CONFIG_VIP_GROUP_SCHED
-/* An entity is a task if it doesn't "own" a runqueue */
-#define vip_entity_is_task(vip)	(!vip->my_q)
 
-#else
-#define vip_entity_is_task(vip)	1
-#endif
+
+/**************************************************************
+ * Scheduling class tree data structure manipulation methods:
+ */
+
+// 比较两个调度实体se的vruntime值大小，以确定搜索方向。
+static inline int vip_entity_before(struct sched_entity *a,
+				struct sched_entity *b)
+{
+	return (s64)(a->vruntime - b->vruntime) < 0;
+}
+
+/*
+ * Enqueue an entity into the rb-tree:
+ */
+static void __enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	// 操作红黑树
+}
 
 
 /*
  * delta /= w
  */
-// 根据任务权重计算调度实体的虚拟时间
+// 根据任务权重计算调度实体实际运行时间对应的虚拟时间
 static inline u64 calc_delta_vip(u64 delta, struct sched_entity *vip_se)
 {
 	if (unlikely(vip_se->load.weight != NICE_0_LOAD))
@@ -64,6 +90,7 @@ static inline u64 calc_delta_vip(u64 delta, struct sched_entity *vip_se)
 	return delta;	// 任务load==虚拟时间计算的参照值NICE_0_LOAD则虚拟时间==实际运行时间
 }
 
+// TODO
 // 需要不断被更新
 // min_vruntime太小，导致后面创建的新进程根据这个值来初始化新进程的虚拟时间，岂不是新创建的进程有可能再一次疯狂了。这一次可能就是cpu0创建，在cpu0上面疯狂
 static void update_vip_min_vruntime(struct vip_rq *vip_rq)
@@ -71,12 +98,57 @@ static void update_vip_min_vruntime(struct vip_rq *vip_rq)
 	// vip队列中当前运行任务vruntime可能是minvruntime
 
 	// vip队列中红黑树最左下节点可能是minvruntime
+
+	可以想一下，如果一个进程刚睡眠1ms，然后醒来后你却要奖励3ms（虚拟时间减去3ms），然后他竟然赚了2ms。作为调度器，我们不做亏本生意。你睡眠100ms，奖励你3ms，那就是没问题的
 }
+
+/*
+ * We calculate the wall-time slice from the period by taking a part
+ * proportional to the weight.
+ *
+ * s = p*P[w/rw]
+ */
+// 计算在这个vip队列中一个周期内(调度时延内)分配给这个权重的进程的真实运行时间
+static u64 sched_vip_slice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	u64 slice = __sched_period(vip_rq->nr_running + !vip_se->on_rq);
+
+	for_each_sched_vip_entity(vip_se) {
+		struct load_weight *load;
+		struct load_weight lw;
+
+		vip_rq = vip_rq_of(vip_se);
+		load = &vip_rq->load;
+
+		if (unlikely(!vip_se->on_rq)) {
+			lw = vip_rq->load;
+
+			update_load_add(&lw, vip_se->load.weight);
+			load = &lw;
+		}
+		slice = __calc_delta(slice, vip_se->load.weight, load);
+	}
+	return slice;
+}
+
+/*
+ * We calculate the vruntime slice of a to-be-inserted task.
+ *
+ * vs = s/w
+ */
+// 计算任务虚拟时间 - 这个任务在一个调度延时内运行时间对应的虚拟运行时间
+static u64 sched_vip_vslice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	// 填入参数1：任务一个调度延时内所用实际时间
+	// 填入参数2：任务的调度实体
+	return calc_delta_vip(sched_vip_slice(vip_rq, vip_se), vip_se);
+}
+
 
 /*
  * Update the current task's runtime statistics.
  */
-// 更新当前运行任务的 vruntime
+// 更新当前运行任务的 vruntime & viprq的min_vruntime
 static void update_curr_vip(struct vip_rq *vip_rq)
 {
 	struct sched_entity *curr = vip_rq->curr;
@@ -97,7 +169,7 @@ static void update_curr_vip(struct vip_rq *vip_rq)
 	schedstat_add(vip_rq->exec_clock, delta_exec);
 
 	curr->vruntime += calc_delta_vip(delta_exec, curr);		// 填入特定参数调用__calc_delta来更新当前调度实体虚拟时间
-	update_vip_min_vruntime(vip_rq);
+	update_vip_min_vruntime(vip_rq);		// TODO
 
 	curr->exec_start = now;
 
@@ -112,6 +184,7 @@ static void update_curr_vip(struct vip_rq *vip_rq)
 }
 
 // flag initial: 1 --> a new task from fork operation  0 --> not a newborn task
+// 补偿睡眠进程 罚时新创建进程
 static void
 place_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int initial)
 {
@@ -125,7 +198,7 @@ place_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int initial
 	 */
 	// 这里是处理创建的进程，针对刚创建的进程会进行一定的惩罚，将虚拟时间加上一个值就是惩罚，毕竟虚拟时间越小越容易被调度执行。惩罚的时间由sched_vip_vslice()计算。
 	if (initial && sched_feat(START_DEBIT))
-		vruntime += sched_vip_vslice(vip_rq, vip_se);
+		vruntime += sched_vip_vslice(vip_rq, vip_se);		// 加上这个进程在一个调度延时内运行时间的虚拟运行时间
 
 	// 被唤醒的旧进程人家都睡了那么久了，这里对他的vruntime减半latency作补偿
 	/* sleeps up to a single latency don't count. */
@@ -181,13 +254,6 @@ static void check_vip_spread(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 #endif
 }
 
-/*
- * Enqueue an entity into the rb-tree:
- */
-static void __enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
-{
-	// 操作红黑树
-}
 
 // 向可运行队列中插入一个新的节点，意味着有一个新的进程状态转换为可运行，这会发生在两种情况下：一是当进程由阻塞态被唤醒，二是fork产生新的进程时。
 // 将其加入队列的过程本质上来说就是红黑树插入新节点的过程：
@@ -267,47 +333,6 @@ account_vip_entity_enqueue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 	vip_rq->nr_running++;
 }
 
-/*
- * We calculate the wall-time slice from the period by taking a part
- * proportional to the weight.
- *
- * s = p*P[w/rw]
- */
-// 计算在这个vip队列中一个周期内(调度时延内)分配给这个权重的进程的真实运行时间
-static u64 sched_vip_slice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
-{
-	u64 slice = __sched_period(vip_rq->nr_running + !vip_se->on_rq);
-
-	for_each_sched_vip_entity(vip_se) {
-		struct load_weight *load;
-		struct load_weight lw;
-
-		vip_rq = vip_rq_of(vip_se);
-		load = &vip_rq->load;
-
-		if (unlikely(!vip_se->on_rq)) {
-			lw = vip_rq->load;
-
-			update_load_add(&lw, vip_se->load.weight);
-			load = &lw;
-		}
-		slice = __calc_delta(slice, vip_se->load.weight, load);
-	}
-	return slice;
-}
-
-/*
- * We calculate the vruntime slice of a to-be-inserted task.
- *
- * vs = s/w
- */
-// 计算任务虚拟时间
-static u64 sched_vip_vslice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
-{
-	// 填入参数1：任务一个调度延时内所用实际时间
-	// 填入参数2：任务的调度实体
-	return calc_delta_vip(sched_vip_slice(vip_rq, vip_se), vip_se);
-}
 
 // 完成当前创建的新进程的虚拟时间初始化
 /*
@@ -315,10 +340,51 @@ static u64 sched_vip_vslice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
  *  - child not yet on the tasklist
  *  - preemption disabled
  */
+// TODO:Step forward unserstanding the function.
 static void task_fork_vip(struct task_struct *p)
 {
 	// 子进程虚拟时间为父进程且减去队列的minvruntime, enqueue_vip_entity不用多加新cpu队列的minvruntime
-	
+	struct vip_rq *vip_rq;
+	struct sched_entity *se = &p->vip, *curr;
+	int this_cpu = smp_processor_id();
+	struct rq *rq = this_rq();
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&rq->lock, flags);
+
+	update_rq_clock(rq);
+
+	vip_rq = task_vip_rq(current);
+	curr = vip_rq->curr;
+
+	/*
+	 * Not only the cpu but also the task_group of the parent might have
+	 * been changed after parent->se.parent,cfs_rq were copied to
+	 * child->se.parent,cfs_rq. So call __set_task_cpu() to make those
+	 * of child point to valid ones.
+	 */
+	rcu_read_lock();
+	__set_task_cpu(p, this_cpu);
+	rcu_read_unlock();
+
+	update_curr_vip(vip_rq);
+
+	if (curr)
+		se->vruntime = curr->vruntime;
+	place_vip_entity(vip_rq, se, 1);
+
+	if (sysctl_sched_child_runs_first && curr && vip_entity_before(curr, se)) {
+		/*
+		 * Upon rescheduling, sched_class::put_prev_task() will place
+		 * 'current' within the tree based on its new key value.
+		 */
+		swap(curr->vruntime, se->vruntime);
+		resched_curr(rq);
+	}
+
+	se->vruntime -= vip_rq->min_vruntime;
+
+	raw_spin_unlock_irqrestore(&rq->lock, flags);
 }
 
 /*
@@ -363,7 +429,7 @@ const struct sched_class vip_sched_class = {
 
 	// .get_rr_interval	= get_rr_interval_vip,
 
-	.update_curr		= update_curr_vip,		// 更新当前运行任务的 vruntime
+	.update_curr		= update_curr_vip,		// 更新当前运行任务的 vruntime & viprq的min_vruntime
 
 // #ifdef CONFIG_VIP_GROUP_SCHED
 // 	.task_change_group	= task_change_group_vip,
