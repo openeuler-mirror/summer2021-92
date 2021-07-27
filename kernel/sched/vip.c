@@ -125,18 +125,44 @@ static inline u64 calc_delta_vip(u64 delta, struct sched_entity *vip_se)
 	return delta;	// 任务load==虚拟时间计算的参照值NICE_0_LOAD则虚拟时间==实际运行时间
 }
 
-// TODO
 // 需要不断被更新
 // min_vruntime太小，导致后面创建的新进程根据这个值来初始化新进程的虚拟时间，岂不是新创建的进程有可能再一次疯狂了。这一次可能就是cpu0创建，在cpu0上面疯狂
 static void update_vip_min_vruntime(struct vip_rq *vip_rq)
 {
+	struct sched_entity *curr = vip_rq->curr;
+	struct rb_node *leftmost = rb_first_cached(&vip_rq->tasks_timeline);
+
+	u64 vruntime = vip_rq->min_vruntime;
+
 	// vip队列中当前运行任务vruntime可能是minvruntime
+	if (curr) {
+		if (curr->on_rq)
+			vruntime = vip_rq->curr->vruntime;
+		else
+			curr = NULL;
+	}
 
 	// vip队列中红黑树最左下节点可能是minvruntime
+	if (leftmost) {
+		struct sched_entity *vip_se = rb_entry(leftmost, struct sched_entity, run_node);
 
 	可以想一下，如果一个进程刚睡眠1ms，然后醒来后你却要奖励3ms（虚拟时间减去3ms），然后他竟然赚了2ms。作为调度器，我们不做亏本生意。你睡眠100ms，奖励你3ms，那就是没问题的
-}
+		if (!curr)
+			vruntime = vip_se->vruntime;
+		else
+			vruntime = min_vruntime(vruntime, vip_se->vruntime);
+	}
 
+	// 不能让min_runtime越来越小，以至于越来越多任务无法使用CPU资源
+	/* ensure we never gain time by being placed backwards. */
+	vip_rq->min_vruntime = max_vruntime(vip_rq->min_vruntime, vruntime);
+
+#ifndef CONFIG_64BIT
+	/* memory barrior for writting */
+	smp_wmb();
+	vip_rq->min_vruntime_copy = vip_rq->min_vruntime;
+#endif
+}
 /*
  * We calculate the wall-time slice from the period by taking a part
  * proportional to the weight.
