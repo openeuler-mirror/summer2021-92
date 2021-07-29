@@ -11,31 +11,26 @@
  */
 #include "sched.h"
 
-// 初始化vip的红黑树(vip_rq)
-void init_vip_rq(struct vip_rq *vip_rq)
-{
-	vip_rq->tasks_timeline.rb_root = RB_ROOT;
-	vip_rq->tasks_timeline.rb_leftmost = NULL;
-	vip_rq->min_vruntime = (u64)(-(1LL << 20));
-#ifndef CONFIG_64BIT
-	vip_rq->min_vruntime_copy = vip_rq->min_vruntime;
-#endif
-}
+/**************************************************************
+ * VIP operations on generic schedulable entities:
+ */
 
 #ifdef CONFIG_VIP_GROUP_SCHED
 /* An entity is a task if it doesn't "own" a runqueue */
 #define vip_entity_is_task(vip)	(!vip->my_q)
 
-#else
+/* Walk up scheduling entities hierarchy */
+#define for_each_sched_vip_entity(vip_se) \
+		for (; vip_se; vip_se = vip_se->parent)
+
+#else	/* !CONFIG_VIP_GROUP_SCHED */
+
 #define vip_entity_is_task(vip)	1
-#endif
 
 #define for_each_sched_vip_entity(vip_se) \
 		for (; vip_se; vip_se = NULL)
 
-/* Walk up scheduling entities hierarchy */
-#define for_each_sched_vip_entity(vip_se) \
-		for (; vip_se; vip_se = vip_se->parent)
+#endif	/* CONFIG_VIP_GROUP_SCHED */	/******************************************************/
 
 static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
 {
@@ -111,6 +106,16 @@ static void __enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip
 static void __dequeue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
 	rb_erase_cached(&vip_se->run_node, &vip_rq->tasks_timeline);
+}
+
+struct sched_entity *__pick_first_vip_entity(struct vip_rq *vip_rq)
+{
+	struct rb_node *left = rb_first_cached(&vip_rq->tasks_timeline);
+
+	if (!left)
+		return NULL;
+
+	return rb_entry(left, struct sched_entity, run_node);
 }
 
 /*
@@ -491,6 +496,69 @@ dequeue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int flags
 	update_vip_min_vruntime(vip_rq);
 }
 
+// check_preempt_tick的作用是根据当前进程已经运行的时间，判断是否需要将进程thread info结构体的flag
+// 通过resched_curr设置为TIF_NEED_RESCHED。这样在执行完本次时钟中断后（即从handle irq返回后），根据需要进行重新调度。
+// TODO
+static void
+check_preempt_tick_vip(struct vip_rq *vip_rq, struct sched_entity *curr)
+{
+	unsigned long ideal_runtime, delta_exec;
+	struct sched_entity *vip_se;
+	s64 delta;
+
+	ideal_runtime = sched_vip_slice(vip_rq, curr);
+	delta_exec = curr->sum_exec_runtime - curr->prev_sum_exec_runtime;
+	if (delta_exec > ideal_runtime) {
+		resched_curr(rq_of_vip_rq(vip_rq));
+		/*
+		 * The current task ran long enough, ensure it doesn't get
+		 * re-elected due to buddy favours.
+		 */
+		clear_buddies_vip(vip_rq, curr);
+		return;
+	}
+
+	/*
+	 * Ensure that a task that missed wakeup preemption by a
+	 * narrow margin doesn't have to wait for a full slice.
+	 * This also mitigates buddy induced latencies under load.
+	 */
+	if (delta_exec < sysctl_sched_min_granularity)
+		return;
+
+	vip_se = __pick_first_vip_entity(vip_rq);
+	delta = curr->vruntime - vip_se->vruntime;
+
+	if (delta < 0)
+		return;
+
+	if (delta > ideal_runtime)
+		resched_curr(rq_of_vip_rq(vip_rq));
+}
+
+static void
+vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
+{
+	/*
+	 * Update run-time bt_statistics of the 'current'.
+	 */
+	update_curr_vip(vip_rq);
+
+#ifdef CONFIG_SCHED_HRTICK
+	/*
+	 * queued ticks are scheduled to match the slice, so don't bother
+	 * validating it and just reschedule.
+	 */
+	if (queued) {
+		resched_curr(rq_of_vip_rq(vip_rq));
+		return;
+	}
+#endif
+
+	if (vip_rq->nr_running > 1)
+		check_preempt_tick_vip(vip_rq, curr);
+}	
+
 /*
  * The enqueue_task method is called before nr_running is
  * increased. Here we update the vip scheduling stats and
@@ -563,6 +631,68 @@ static void dequeue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 	}
 }
 
+static unsigned long
+wakeup_gran_vip(struct sched_entity *curr, struct sched_entity *vip_se)
+{
+	unsigned long gran = sysctl_sched_wakeup_granularity;
+
+	/*
+	 * Since its curr running now, convert the gran from real-time
+	 * to virtual-time in his units.
+	 *
+	 * By using 'se' instead of 'curr' we penalize light tasks, so
+	 * they get preempted easier. That is, if 'se' < 'curr' then
+	 * the resulting gran will be larger, therefore penalizing the
+	 * lighter, if otoh 'se' > 'curr' then the resulting gran will
+	 * be smaller, again penalizing the lighter task.
+	 *
+	 * This is especially important for buddies when the leftmost
+	 * task is higher priority than the buddy.
+	 */
+	return calc_delta_vip(gran, vip_se);
+}
+
+/*
+ * Should 'se' preempt 'curr'.
+ *
+ * se3             se2    curr         se1
+ * ------|---------------|------|-----------|--------> vruntime
+ *         |<------gran------>|
+ *                        
+ *
+ *    wakeup_preempt_entity(curr, se1) = -1
+ *    wakeup_preempt_entity(curr, se2) =  0
+ *    wakeup_preempt_entity(curr, se3) =  1
+ *
+ */
+// 满足抢占的条件就是，唤醒的进程的虚拟时间首先要比正在运行进程的虚拟时间小，并且差值还要大于
+// 一定的值才行（这个值是sysctl_sched_wakeup_granularity，称作唤醒抢占粒度）。
+// 这样做的目的是避免抢占过于频繁，导致大量上下文切换影响系统性能。
+// unsigned int sysctl_sched_wakeup_granularity = 1000000UL;
+static int
+wakeup_preempt_vip_entity(struct sched_entity *curr, struct sched_entity *vip_se)
+{
+	s64 gran, vdiff = curr->vruntime - vip_se->vruntime;
+
+	if (vdiff <= 0)
+		return -1;
+
+	gran = wakeup_gran_vip(curr, vip_se);
+	if (vdiff > gran)
+		return 1;
+
+	return 0;
+}
+
+static void set_last_buddy_vip(struct sched_entity *vip_se)
+{
+	if (vip_entity_is_task(vip_se))
+		return;
+
+	for_each_sched_vip_entity(vip_se)
+		vip_rq_of(vip_se)->last = vip_se;
+}
+
 static void set_next_buddy_vip(struct sched_entity *vip_se)
 {
 	if (vip_entity_is_task(vip_se))
@@ -570,6 +700,103 @@ static void set_next_buddy_vip(struct sched_entity *vip_se)
 
 	for_each_sched_vip_entity(vip_se)
 		vip_rq_of(vip_se)->next = vip_se;
+}
+
+static int higher_than_vip(int policy)
+{
+	if (policy == SCHED_DEADLINE || policy == SCHED_FIFO || policy == SCHED_RR)
+		return 1;
+	
+	return 0;
+}
+
+/*
+ * Preempt the current task with a `newly woken` task if needed:
+ */
+// 	.check_preempt_curr	= check_preempt_wakeup_vip,
+// 检查当前运行进程curr是否能被新唤醒进程p抢占 -- 满足条件则需标记 TIF_NEED_RESCHED
+static void check_preempt_wakeup_vip(struct rq *rq, struct task_struct *p, int wake_flags)
+{
+	struct task_struct *curr = rq->curr;
+	struct sched_entity *se = &curr->vip, *pse = &p->vip;
+	struct vip_rq *vip_rq = task_vip_rq(curr);
+	int scale = vip_rq->nr_running >= sched_nr_latency;
+	int next_buddy_marked = 0;
+
+	if (unlikely(se == pse))
+		return;
+
+	if (sched_feat(NEXT_BUDDY) && scale && !(wake_flags & WF_FORK)) {
+		set_next_buddy_vip(pse);
+		next_buddy_marked = 1;
+	}
+
+	/*
+	 * We can come here with TIF_NEED_RESCHED already set from new task
+	 * wake up path.
+	 *
+	 * Note: this also catches the edge-case of curr being in a throttled
+	 * group (e.g. via set_curr_task), since update_curr() (in the
+	 * enqueue of curr) will have resulted in resched being set.  This
+	 * prevents us from potentially nominating it as a false LAST_BUDDY
+	 * below.
+	 */
+	if (test_tsk_need_resched(curr))
+		return;
+
+	if (likely(higher_than_vip(p->policy)))
+		goto preempt;
+
+	if (!sched_feat(WAKEUP_PREEMPTION))
+		return;
+
+	update_curr_vip(vip_rq_of(se));
+	BUG_ON(!pse);
+	if (wakeup_preempt_vip_entity(se, pse) == 1) {
+		// 满足抢占两个条件：vruntime更小，curr与主动抢占的vruntime差值满足一定条件避免频繁切换
+		/*
+		 * Bias pick_next to pick the sched entity that is
+		 * triggering this preemption.
+		 */
+		if (!next_buddy_marked)
+			set_next_buddy_vip(pse);
+		goto preempt;
+	}
+
+	return;
+
+preempt:
+	resched_curr(rq);
+	/*
+	 * Only set the backward buddy when the current task is still
+	 * on the rq. This can happen when a wakeup gets interleaved
+	 * with schedule on the ->pre_schedule() or idle_balance()
+	 * point, either of which can * drop the rq lock.
+	 *
+	 * Also, during early boot the idle thread is in the fair class,
+	 * for obvious reasons its a bad idea to schedule back to it.
+	 */
+	if (unlikely(!se->on_rq || curr == rq->idle))
+		return;
+
+	if (sched_feat(LAST_BUDDY) && scale && vip_entity_is_task(se))
+		set_last_buddy_vip(se);
+}
+
+/*
+ * scheduler tick hitting a task of our scheduling class:
+ */
+static void task_tick_vip(struct rq *rq, struct task_struct *curr, int queued)
+{
+	struct vip_rq *vip_rq;
+	struct sched_entity *vip_se = &rq->curr;
+	
+	for_each_sched_vip_entity(vip_se) {
+		vip_rq = vip_rq_of(vip_se);
+		vip_entity_tick(vip_rq, vip_se, queued);
+	}
+
+	// TODO NUMA tick judging
 }
 
 // 完成当前创建的新进程的虚拟时间初始化
@@ -642,11 +869,11 @@ void init_vip_rq(struct vip_rq *vip_rq)
 const struct sched_class vip_sched_class = {
 	.next			= &fair_sched_class,	// 下一个优先级调度类
 	.enqueue_task		= enqueue_task_vip,  // 一个 task 变成就绪状态, 希望挂上这个调度器的就绪队列(rq)
-	// .dequeue_task		= dequeue_task_vip,  // 一个 task 不再就绪了(比如阻塞了), 要从调度器的就绪队列上离开
+	.dequeue_task		= dequeue_task_vip,  // 一个 task 不再就绪了(比如阻塞了), 要从调度器的就绪队列上离开
 	// .yield_task		= yield_task_vip,	// 跳过当前任务
 	// .yield_to_task		= yield_to_task_vip,	// yield_to_task_vip(p) 跳过当前任务, 并且尽量调度任务 p
 
-	// .check_preempt_curr	= check_preempt_curr_vip,	// 这个函数在有任务被唤醒时候调用, 看看能不能抢占当前任务
+	.check_preempt_curr	= check_preempt_wakeup_vip,	// 这个函数在有任务被唤醒时候调用, 看看能不能抢占当前任务
 
 	// .pick_next_task		= __pick_next_task_vip,		// 选择下一个就绪的任务以运行
 	// .put_prev_task		= put_prev_task_vip,		// 	put_prev_task(rq, prev); /* 将切换出去进程插到队尾 */
@@ -664,7 +891,7 @@ const struct sched_class vip_sched_class = {
 	// .set_cpus_allowed	= set_cpus_allowed_common,
 #endif
 
-	// .task_tick		= task_tick_vip,		// 大部分情况下是用作时钟中断的回调 it might lead to process switch. This drives the running preemption.
+	.task_tick		= task_tick_vip,		// 大部分情况下是用作时钟中断的回调 it might lead to process switch. This drives the running preemption.
 
 
 // * called on fork with the child task as argument from the parent's context
