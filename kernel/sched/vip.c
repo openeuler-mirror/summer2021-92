@@ -11,6 +11,17 @@
  */
 #include "sched.h"
 
+void set_vip_load_weight(struct task_struct *p)
+{
+	int prio = p->static_prio - MIN_VIP_PRIO;
+	struct load_weight *load = &p->vip.load;
+
+	load->weight = scale_load(sched_prio_to_weight[prio]);
+	load->inv_weight = sched_prio_to_wmult[prio];
+}
+
+const struct sched_class vip_sched_class;
+
 /**************************************************************
  * VIP operations on generic schedulable entities:
  */

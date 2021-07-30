@@ -1323,7 +1323,7 @@ void activate_task(struct rq *rq, struct task_struct *p, int flags)
 {
 	if (task_contributes_to_load(p))
 		rq->nr_uninterruptible--;
-
+// TODO: How to handle vip.nr_uninterruptible--
 	enqueue_task(rq, p, flags);
 
 	p->on_rq = TASK_ON_RQ_QUEUED;
@@ -1333,8 +1333,12 @@ void deactivate_task(struct rq *rq, struct task_struct *p, int flags)
 {
 	p->on_rq = (flags & DEQUEUE_SLEEP) ? 0 : TASK_ON_RQ_MIGRATING;
 
-	if (task_contributes_to_load(p))
+	if (task_contributes_to_load(p)) {
 		rq->nr_uninterruptible++;
+// TODO: How to handle vip.nr_uninterruptible++
+
+		if ()
+	}
 
 	dequeue_task(rq, p, flags);
 }
@@ -1405,6 +1409,7 @@ inline int task_curr(const struct task_struct *p)
  * this means any call to check_class_changed() must be followed by a call to
  * balance_callback().
  */
+ // TODO How to understand
 static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 				       const struct sched_class *prev_class,
 				       int oldprio)
@@ -4557,7 +4562,7 @@ void set_user_nice(struct task_struct *p, long nice)
 #ifdef	CONFIG_VIP_SCHED
 	if (task_has_vip_policy(p)) {
        p->static_prio = NICE_TO_VIP_PRIO(nice);
-    //    set_vip_load_weight(p);	// my_TODO
+       set_vip_load_weight(p);	// my_TODO
    } else
 #endif
    {
@@ -4750,7 +4755,7 @@ static void __setscheduler_params(struct task_struct *p,
 #ifdef	CONFIG_VIP_SCHED
 	if (unlikely(policy == SCHED_VIP)) {
 		vip_prio_adjust_nega(&p->static_prio);
-		// set_vip_load_weight(p);		// my_TODO
+		set_vip_load_weight(p);		// my_TODO
 	} else if (policy == SCHED_NORMAL || policy == SCHED_BATCH ||
 		policy == SCHED_IDLE) {
 		vip_prio_adjust_posi(&p->static_prio);
