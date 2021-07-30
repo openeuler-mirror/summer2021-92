@@ -118,6 +118,16 @@ struct sched_entity *__pick_first_vip_entity(struct vip_rq *vip_rq)
 	return rb_entry(left, struct sched_entity, run_node);
 }
 
+static struct sched_entity *__pick_next_vip_entity(struct sched_entity *vip_se)
+{
+	struct rb_node *next = rb_next(&vip_se->run_node);
+
+	if (!next)
+		return NULL;
+
+	return rb_entry(next, struct sched_entity, run_node);
+}
+
 /*
  * delta /= w
  */
@@ -537,6 +547,98 @@ check_preempt_tick_vip(struct vip_rq *vip_rq, struct sched_entity *curr)
 }
 
 static void
+set_next_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se)
+{
+	/* 'current' is not kept within the tree. */
+	if (vip_se->on_rq) {
+		/*
+		 * Any task has to be enqueued before it get to execute on
+		 * a CPU. So account for the time it spent waiting on the
+		 * runqueue.
+		 */
+		update_stats_wait_end_vip(vip_rq, vip_se);
+		__dequeue_vip_entity(vip_rq, vip_se);
+	}
+
+	update_stats_curr_start_vip(vip_rq, vip_se);
+	vip_rq->curr = vip_se;			// 昭告天下
+#ifdef CONFIG_SCHEDSTATS
+	/*
+	 * Track our maximum slice length, if the CPU's load is at
+	 * least twice that of our own weight (i.e. dont track it
+	 * when there are only lesser-weight tasks around):
+	 */
+	if (vip_rq->load.weight >= 2*vip_se->load.weight) {
+		vip_se->vip_statistics->slice_max = max(vip_se->vip_statistics->slice_max,
+			vip_se->sum_exec_runtime - vip_se->prev_sum_exec_runtime);
+	}
+#endif
+	vip_se->prev_sum_exec_runtime = vip_se->sum_exec_runtime;
+}
+
+static int
+wakeup_preempt_vip_entity(struct sched_entity *curr, struct sched_entity *vip_se);
+
+/*
+ * Pick the next process, keeping these things in mind, in this order:
+ * 1) keep things fair between processes/task groups
+ * 2) pick the "next" process, since someone really wants that to run
+ * 3) pick the "last" process, for cache locality
+ * 4) do not run the "skip" process, if something else is available
+ */
+static struct sched_entity *pick_next_vip_entity(struct vip_rq *vip_rq)
+{
+	struct sched_entity *vip_se = __pick_first_vip_entity(vip_rq);
+	struct sched_entity *left = vip_se;
+
+	/*
+	 * Avoid running the skip buddy, if running something else can
+	 * be done without getting too unfair.
+	 */
+	if (vip_rq->skip == vip_se) {
+		struct sched_entity *vip_second = __pick_next_vip_entity(vip_se);
+
+		if (second && wakeup_preempt_vip_entity(second, left) < 1)
+			vip_se = second;
+	}
+
+	/*
+	 * Prefer last buddy, try to return the CPU to a preempted task.
+	 */
+	if (vip_rq->last && wakeup_preempt_vip_entity(vip_rq->last, left) < 1)
+		vip_se = vip_rq->last;
+
+	/*
+	 * Someone really wants this to run. If it's not unfair, run it.
+	 */
+	if (vip_rq->next && wakeup_preempt_vip_entity(vip_rq->next, left) < 1)
+		vip_se = vip_rq->next;
+
+	clear_buddies_vip(vip_rq, vip_se);
+
+	return vip_se;
+}
+
+static void put_prev_vip_entity(struct vip_rq *vip_rq, struct sched_entity *prev)
+{
+	/*
+	 * If still on the runqueue then deactivate_task()
+	 * was not called and update_curr() has to be done:
+	 */
+	if (prev->on_rq)
+		update_curr_vip(vip_rq);
+
+	check_vip_spread(vip_rq, prev);
+	if (prev->on_rq) {
+		update_stats_wait_start_vip(vip_rq, prev);
+		/* Put 'current' back into the tree. */
+		__enqueue_vip_entity(vip_rq, prev);
+	}
+	vip_rq->curr = NULL;
+}
+
+
+static void
 vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
 {
 	/*
@@ -785,7 +887,53 @@ preempt:
 
 static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
+	struct task_struct *p;
+	struct vip_rq *vip_rq = &rq->vip;
+	struct sched_entity *vip_se;
+	int new_tasks = -1;
 
+again:
+	if (!vip_rq->nr_running)
+		goto idle;
+
+	put_prev_task(rq, prev);
+
+	vip_se = pick_next_vip_entity(vip_rq);
+	set_next_vip_entity(vip_rq, vip_se);
+
+	p = vip_task_of(vip_se);
+
+	return p;
+
+idle:
+	new_tasks = idle_balance(rq, rf);
+
+	/*
+	 * Because idle_balance() releases (and re-acquires) rq->lock, it is
+	 * possible for any higher priority task to appear. In that case we
+	 * must re-start the pick_next_entity() loop.
+	 */
+	if (new_tasks < 0)
+		return RETRY_TASK;
+
+	if (new_tasks > 0)
+		goto again;
+
+	return NULL;
+}
+
+/*
+ * Account for a descheduled task:
+ */
+static void put_prev_task_vip(struct rq *rq, struct task_struct *prev)
+{
+	struct sched_entity *vip_se = &prev->vip;
+	struct vip_rq *vip_rq;
+
+	for_each_sched_vip_entity(vip_se) {
+		vip_rq = vip_rq_of(vip_se);
+		put_prev_vip_entity(vip_rq, vip_se);
+	}
 }
 
 /*
@@ -880,9 +1028,9 @@ const struct sched_class vip_sched_class = {
 
 	.check_preempt_curr	= check_preempt_wakeup_vip,	// 这个函数在有任务被唤醒时候调用, 看看能不能抢占当前任务
 
-	// .pick_next_task		= pick_next_task_vip,		// 选择下一个就绪的任务以运行
-	// .put_prev_task		= put_prev_task_vip,		// 	put_prev_task(rq, prev); /* 将切换出去进程插到队尾 */
-	// .set_next_task          = set_next_task_vip,		// This routine is mostly called to set vip_rq->curr field when a task migrates between groups/classes.
+	.pick_next_task		= pick_next_task_vip,		// 选择下一个就绪的任务以运行
+	.put_prev_task		= put_prev_task_vip,		// 	put_prev_task(rq, prev); /* 将切换出去进程插到队尾 */
+	.set_next_task          = set_next_task_vip,		// This routine is mostly called to set vip_rq->curr field when a task migrates between groups/classes.
 
 #ifdef CONFIG_SMP
 	// .balance		= balance_vip,
