@@ -23,6 +23,28 @@
 #define for_each_sched_vip_entity(vip_se) \
 		for (; vip_se; vip_se = vip_se->parent)
 
+static inline struct sched_entity *parent_vip_entity(struct sched_entity *vip_se)
+{
+	return vip_se->parent;
+}
+
+/* runqueue on which this entity is (to be) queued */
+static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
+{
+	return vip_se->vip_rq;
+}
+
+static inline struct vip_rq *task_vip_rq(struct task_struct *p)
+{
+	return p->vip.vip_rq;
+}
+
+/* cpu runqueue to which this cfs_rq is attached */
+static inline struct rq *rq_of_vip_rq(struct vip_rq *vip_rq)
+{
+	return vip_rq->rq;
+}
+
 #else	/* !CONFIG_VIP_GROUP_SCHED */
 
 #define vip_entity_is_task(vip)	1
@@ -30,16 +52,9 @@
 #define for_each_sched_vip_entity(vip_se) \
 		for (; vip_se; vip_se = NULL)
 
-#endif	/* CONFIG_VIP_GROUP_SCHED */	/******************************************************/
-
-static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
+static inline struct sched_entity *parent_vip_entity(struct sched_entity *vip_se)
 {
-	return container_of(vip_se, struct task_struct, vip);
-}
-
-static inline struct vip_rq *task_vip_rq(struct task_struct *p)
-{
-	return &task_rq(p)->vip;
+	return NULL;
 }
 
 static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
@@ -50,14 +65,21 @@ static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
 	return &rq->vip;
 }
 
+static inline struct vip_rq *task_vip_rq(struct task_struct *p)
+{
+	return &task_rq(p)->vip;
+}
+
 static inline struct rq *rq_of_vip_rq(struct vip_rq* vip_rq)
 {
 	return container_of(vip_rq, struct rq, vip);
 }
 
-static inline struct sched_entity *parent_vip_entity(struct sched_entity *vip_se)
+#endif	/* CONFIG_VIP_GROUP_SCHED */	/******************************************************/
+
+static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
 {
-	return NULL;
+	return container_of(vip_se, struct task_struct, vip);
 }
 
 /**************************************************************
@@ -116,6 +138,16 @@ struct sched_entity *__pick_first_vip_entity(struct vip_rq *vip_rq)
 		return NULL;
 
 	return rb_entry(left, struct sched_entity, run_node);
+}
+
+static struct sched_entity *__pick_next_vip_entity(struct sched_entity *vip_se)
+{
+	struct rb_node *next = rb_next(&vip_se->run_node);
+
+	if (!next)
+		return NULL;
+
+	return rb_entry(next, struct sched_entity, run_node);
 }
 
 static struct sched_entity *__pick_next_vip_entity(struct sched_entity *vip_se)
@@ -414,9 +446,8 @@ enqueue_vip_entity(struct vip_rq *vip_rq, struct sched_entity *vip_se, int flags
 	if (vip_se != vip_rq->curr)
 		__enqueue_vip_entity(vip_rq, vip_se);
 	vip_se->on_rq = 1;
-	
 }
-
+// enqueue_vip_sleeper
 
 static void __clear_buddies_last_vip(struct sched_entity *vip_se)
 {
