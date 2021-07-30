@@ -1005,6 +1005,60 @@ static void task_fork_vip(struct task_struct *p)
 	raw_spin_unlock_irqrestore(&rq->lock, flags);
 }
 
+/*
+ * Priority of the task has changed. Check to see if we preempt
+ * the current task.
+ */
+static void
+prio_changed_vip(struct rq *rq, struct task_struct *p, int oldprio)
+{
+	if (!p->vip.on_rq)
+		return;
+
+	/*
+	 * Reschedule if we are currently running on this runqueue and
+	 * our priority decreased, or if we are not currently running on
+	 * this runqueue and our priority is higher than the current's
+	 */
+	if (rq->curr == p) {
+		if (p->prio > oldprio)
+			resched_curr(rq);
+	} else
+		check_preempt_curr(rq, p, 0);
+}
+
+static void switched_from_vip(struct rq *rq, struct task_struct *p)
+{
+	struct sched_entity *se = &p->vip;
+	struct vip_rq *vip_rq = vip_rq_of(se);
+
+	if (!p->on_rq && p->state != TASK_RUNNING) {
+		/*
+		 * Fix up our vruntime so that the current sleep doesn't
+		 * cause 'unlimited' sleep bonus.
+		 */
+		place_vip_entity(vip_rq, se, 0);
+		se->vruntime -= vip_rq->min_vruntime;
+	}
+}
+
+static void switched_to_vip(struct rq *rq, struct task_struct *p)
+{
+	BUG_ON(!vip_prio(p->static_prio));
+
+	if (p->vip.on_rq) {
+		/*
+		* We were most likely switched from sched_rt, so
+		* kick off the schedule if running, otherwise just see
+		* if we can still preempt the current task.
+		*/
+		if (rq->curr == p)
+			resched_curr(rq);
+		else
+			check_preempt_curr(rq, p, 0);
+	}
+}
+
 // 初始化vip_rq的红黑树 -- start_kernel -> sched_init -> init_vip_rq
 void init_vip_rq(struct vip_rq *vip_rq)
 {
@@ -1052,9 +1106,9 @@ const struct sched_class vip_sched_class = {
 //  *  - preemption disabled
 	.task_fork		= task_fork_vip,		// 完成当前创建的新进程的虚拟时间初始化
 
-	// .prio_changed		= prio_changed_vip,
-	// .switched_from		= switched_from_vip,
-	// .switched_to		= switched_to_vip,		// 上下文切换
+	.prio_changed		= prio_changed_vip,
+	.switched_from		= switched_from_vip,
+	.switched_to		= switched_to_vip,
 
 	// .get_rr_interval	= get_rr_interval_vip,
 
