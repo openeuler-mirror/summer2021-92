@@ -3938,7 +3938,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		    prev->sched_class == &fair_sched_class) &&
 		   rq->nr_running == rq->cfs.h_nr_running)) {
 
-		p = pick_next_task_fair(rq, prev, rf);
+		p = pick_next_task_fair(rq, prev, rf);		// 快速优化 因此有__pick_next_task_fair 与 pick_next_task_fair
 		if (unlikely(p == RETRY_TASK))
 			goto restart;
 

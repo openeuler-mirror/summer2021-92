@@ -540,7 +540,7 @@ static void
 vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
 {
 	/*
-	 * Update run-time bt_statistics of the 'current'.
+	 * Update run-time vip_statistics of the 'current'.
 	 */
 	update_curr_vip(vip_rq);
 
@@ -783,6 +783,11 @@ preempt:
 		set_last_buddy_vip(se);
 }
 
+static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+{
+
+}
+
 /*
  * scheduler tick hitting a task of our scheduling class:
  */
@@ -875,7 +880,7 @@ const struct sched_class vip_sched_class = {
 
 	.check_preempt_curr	= check_preempt_wakeup_vip,	// 这个函数在有任务被唤醒时候调用, 看看能不能抢占当前任务
 
-	// .pick_next_task		= __pick_next_task_vip,		// 选择下一个就绪的任务以运行
+	// .pick_next_task		= pick_next_task_vip,		// 选择下一个就绪的任务以运行
 	// .put_prev_task		= put_prev_task_vip,		// 	put_prev_task(rq, prev); /* 将切换出去进程插到队尾 */
 	// .set_next_task          = set_next_task_vip,		// This routine is mostly called to set vip_rq->curr field when a task migrates between groups/classes.
 
