@@ -22,6 +22,11 @@ void set_vip_load_weight(struct task_struct *p)
 
 const struct sched_class vip_sched_class;
 
+static inline int vip_task(struct task_struct *p)
+{
+	return vip_prio(p->prio);
+}
+
 /**************************************************************
  * VIP operations on generic schedulable entities:
  */
@@ -50,7 +55,7 @@ static inline struct vip_rq *task_vip_rq(struct task_struct *p)
 	return p->vip.vip_rq;
 }
 
-/* cpu runqueue to which this cfs_rq is attached */
+/* cpu runqueue to which this vip_rq is attached */
 static inline struct rq *rq_of_vip_rq(struct vip_rq *vip_rq)
 {
 	return vip_rq->rq;
@@ -738,7 +743,7 @@ enqueue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 /*
  * The dequeue_task_vip method is called before nr_running is
  * decreased. We remove the task from the rbtree and
- * update the fair scheduling stats:
+ * update the vip scheduling stats:
  */
 // TODO
 static void dequeue_task_vip(struct rq *rq, struct task_struct *p, int flags)
@@ -774,6 +779,143 @@ static void dequeue_task_vip(struct rq *rq, struct task_struct *p, int flags)
 		rq->vip_nr_running--;
 	}
 }
+
+#ifdef CONFIG_SMP
+static DEFINE_PER_CPU(cpumask_var_t, local_cpu_mask_vip);
+
+static int find_lowest_rq_vip(struct task_struct *task)
+{
+	struct sched_domain *sd;
+	struct cpumask *lowest_mask = this_cpu_cpumask_var_ptr(local_cpu_mask_vip);
+	int this_cpu = smp_processor_id();
+	int cpu      = task_cpu(task);
+
+	/* Make sure the mask is initialized first */
+	if (unlikely(!lowest_mask))
+		return -1;
+
+	if (task->nr_cpus_allowed == 1)
+		return -1; /* No other targets possible */
+
+	if (!cpupri_find(&task_rq(task)->rd->cpupri, task, lowest_mask))
+		return -1; /* No targets found */
+
+	/*
+	 * At this point we have built a mask of CPUs representing the
+	 * lowest priority tasks in the system.  Now we want to elect
+	 * the best one based on our affinity and topology.
+	 *
+	 * We prioritize the last CPU that the task executed on since
+	 * it is most likely cache-hot in that location.
+	 */
+	if (cpumask_test_cpu(cpu, lowest_mask))
+		return cpu;
+
+	/*
+	 * Otherwise, we consult the sched_domains span maps to figure
+	 * out which CPU is logically closest to our hot cache data.
+	 */
+	if (!cpumask_test_cpu(this_cpu, lowest_mask))
+		this_cpu = -1; /* Skip this_cpu opt if not among lowest */
+
+	rcu_read_lock();
+	for_each_domain(cpu, sd) {
+		if (sd->flags & SD_WAKE_AFFINE) {
+			int best_cpu;
+
+			/*
+			 * "this_cpu" is cheaper to preempt than a
+			 * remote processor.
+			 */
+			if (this_cpu != -1 &&
+			    cpumask_test_cpu(this_cpu, sched_domain_span(sd))) {
+				rcu_read_unlock();
+				return this_cpu;
+			}
+
+			best_cpu = cpumask_first_and(lowest_mask,
+						     sched_domain_span(sd));
+			if (best_cpu < nr_cpu_ids) {
+				rcu_read_unlock();
+				return best_cpu;
+			}
+		}
+	}
+	rcu_read_unlock();
+
+	/*
+	 * And finally, if there were no matches within the domains
+	 * just give the caller *something* to work with from the compatible
+	 * locations.
+	 */
+	if (this_cpu != -1)
+		return this_cpu;
+
+	cpu = cpumask_any(lowest_mask);
+	if (cpu < nr_cpu_ids)
+		return cpu;
+
+	return -1;
+}
+
+// 返回的CPU是给待唤醒的任务所设置的
+static int
+select_task_rq_vip(struct task_struct *p, int cpu, int sd_flag, int flags)
+{
+	struct task_struct *curr;
+	struct rq *rq;
+
+	/* For anything but wake ups, just return the task_cpu */
+	if (sd_flag != SD_BALANCE_WAKE && sd_flag != SD_BALANCE_FORK)
+		goto out;
+
+	rq = cpu_rq(cpu);
+
+	rcu_read_lock();
+	curr = READ_ONCE(rq->curr); /* unlocked access */
+
+	/*
+	 * If the current task on @p's runqueue is an VIP task, then
+	 * try to see if we can wake this VIP task up on another
+	 * runqueue. Otherwise simply start this VIP task
+	 * on its current runqueue.
+	 *
+	 * We want to avoid overloading runqueues. If the woken
+	 * task is a higher priority, then it will stay on this CPU
+	 * and the lower prio task should be moved to another CPU.
+	 * Even though this will probably make the lower prio task
+	 * lose its cache, we do not want to bounce a higher task
+	 * around just because it gave up its CPU, perhaps for a
+	 * lock?
+	 *
+	 * For equal prio tasks, we just let the scheduler sort it out.
+	 *
+	 * Otherwise, just let it ride on the affined RQ and the
+	 * post-schedule router will push the preempted task away
+	 *
+	 * This test is optimistic, if we get it wrong the load-balancer
+	 * will have to sort it out.
+	 */
+	// 如果满足这些条件(即curr不能迁移)，则找一个空闲的CPU给新唤醒的任务(p)
+	if (curr && unlikely(vip_task(curr)) &&
+	    (curr->nr_cpus_allowed < 2 ||
+	     curr->prio <= p->prio)) {
+		int target = find_lowest_rq_vip(p);
+
+		/*
+		 * Don't bother moving it if the destination CPU is
+		 * not running a lower priority task.
+		 */
+		if (target != -1 &&
+		    p->prio < cpu_rq(target)->vip.highest_prio.curr)
+			cpu = target;
+	}
+	rcu_read_unlock();
+
+out:
+	return cpu;
+}
+#endif	/* CONFIG_SMP */
 
 static unsigned long
 wakeup_gran_vip(struct sched_entity *curr, struct sched_entity *vip_se)
@@ -854,6 +996,12 @@ static int higher_than_vip(int policy)
 	return 0;
 }
 
+static void set_skip_buddy_vip(struct sched_entity *vip_se)
+{
+	for_each_sched_vip_entity(vip_se)
+		vip_rq_of(vip_se)->skip = vip_se;
+}
+
 /*
  * Preempt the current task with a `newly woken` task if needed:
  */
@@ -917,7 +1065,7 @@ preempt:
 	 * with schedule on the ->pre_schedule() or idle_balance()
 	 * point, either of which can * drop the rq lock.
 	 *
-	 * Also, during early boot the idle thread is in the fair class,
+	 * Also, during early boot the idle thread is in the vip class,
 	 * for obvious reasons its a bad idea to schedule back to it.
 	 */
 	if (unlikely(!se->on_rq || curr == rq->idle))
@@ -977,6 +1125,68 @@ static void put_prev_task_vip(struct rq *rq, struct task_struct *prev)
 		put_prev_vip_entity(vip_rq, vip_se);
 	}
 }
+
+/*
+ * sched_yield() is very simple
+ *
+ * The magic of dealing with the ->skip buddy is in pick_next_entity.
+ */
+static void yield_task_vip(struct rq *rq)
+{
+	struct task_struct *curr = rq->curr;
+	struct vip_rq *vip_rq = task_vip_rq(curr);
+	struct sched_entity *vip_se = &curr->vip;
+
+	/*
+	 * Are we the only task in the tree?
+	 */
+	if (unlikely(rq->vip_nr_running == 1))
+		return;
+
+	clear_buddies_vip(vip_rq, vip_se);
+
+	update_rq_clock(rq);
+	/*
+	 * Update run-time vip_statistics of the 'current'.
+	 */
+	update_curr_vip(vip_rq);
+	/*
+	 * Tell update_rq_clock() that we've just updated,
+	 * so we don't do microscopic update in schedule()
+	 * and double the fastpath cost.
+	 */
+	rq_clock_skip_update(rq, true);
+
+	set_skip_buddy_vip(vip_se);
+}
+
+static bool yield_to_task_vip(struct rq *rq, struct task_struct *p, bool preempt)
+{
+	struct sched_entity *vip_se = &p->vip;
+
+	if (!vip_se->on_rq)
+		return false;
+
+	/* Tell the scheduler that we'd really like pse to run next. */
+	set_next_buddy_vip(vip_se);
+
+	yield_task_vip(rq);
+
+	return true;
+}
+
+#ifdef CONFIG_SMP
+static void rq_online_vip(struct rq *rq)
+{
+	update_sysctl();
+}
+
+static void rq_offline_vip(struct rq *rq)
+{
+	update_sysctl();
+}
+
+#endif /* CONFIG_SMP */
 
 /*
  * scheduler tick hitting a task of our scheduling class:
@@ -1101,6 +1311,23 @@ static void switched_to_vip(struct rq *rq, struct task_struct *p)
 	}
 }
 
+/* Account for a task changing its policy or group.
+ *
+ * This routine is mostly called to set vip_rq->curr field when a task
+ * migrates between groups/classes.
+ */
+static void set_curr_task_vip(struct rq *rq)
+{
+	struct sched_entity *vip_se = &rq->curr->vip;
+
+	for_each_sched_vip_entity(se) {
+		struct vip_rq *vip_rq = vip_rq_of(vip_se);
+
+		set_next_vip_entity(vip_rq, vip_se);
+	}
+}
+
+
 // 初始化vip_rq的红黑树 -- start_kernel -> sched_init -> init_vip_rq
 void init_vip_rq(struct vip_rq *vip_rq)
 {
@@ -1119,8 +1346,8 @@ const struct sched_class vip_sched_class = {
 	.next			= &fair_sched_class,	// 下一个优先级调度类
 	.enqueue_task		= enqueue_task_vip,  // 一个 task 变成就绪状态, 希望挂上这个调度器的就绪队列(rq)
 	.dequeue_task		= dequeue_task_vip,  // 一个 task 不再就绪了(比如阻塞了), 要从调度器的就绪队列上离开
-	// .yield_task		= yield_task_vip,	// 跳过当前任务
-	// .yield_to_task		= yield_to_task_vip,	// yield_to_task_vip(p) 跳过当前任务, 并且尽量调度任务 p
+	.yield_task		= yield_task_vip,	// 跳过当前任务（do_sched_yield调用<-yield调用/syscall调用）
+	.yield_to_task		= yield_to_task_vip,	// yield_to_task_vip(p) 跳过当前任务, 并且尽量调度任务 p
 
 	.check_preempt_curr	= check_preempt_wakeup_vip,	// 这个函数在有任务被唤醒时候调用, 看看能不能抢占当前任务
 
@@ -1130,16 +1357,16 @@ const struct sched_class vip_sched_class = {
 
 #ifdef CONFIG_SMP
 	// .balance		= balance_vip,
-	// .select_task_rq		= select_task_rq_vip,
+	.select_task_rq		= select_task_rq_vip,
 	// .migrate_task_rq	= migrate_task_rq_vip,
 
-	// .rq_online		= rq_online_vip,		// oneline offline 没必要
-	// .rq_offline		= rq_offline_vip,
+	.rq_online		= rq_online_vip,		// oneline offline 没必要
+	.rq_offline		= rq_offline_vip,
 
 	// .task_dead		= task_dead_vip,
 	// .set_cpus_allowed	= set_cpus_allowed_common,
 #endif
-
+	.set_curr_task		= set_curr_task_vip;
 	.task_tick		= task_tick_vip,		// 大部分情况下是用作时钟中断的回调 it might lead to process switch. This drives the running preemption.
 
 
