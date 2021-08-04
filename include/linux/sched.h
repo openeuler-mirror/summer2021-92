@@ -712,7 +712,7 @@ struct task_struct {
 #endif
 
 	unsigned int			policy;
-	int				nr_cpus_allowed;
+	int				nr_cpus_allowed;	// 该进程允许使用的cpu的数量（即该进程可以在多少个不同的cpu上调度）
 	const cpumask_t			*cpus_ptr;
 	cpumask_t			cpus_mask;
 

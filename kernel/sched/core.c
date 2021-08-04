@@ -38,6 +38,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(pelt_irq_tp);
 EXPORT_TRACEPOINT_SYMBOL_GPL(pelt_se_tp);
 EXPORT_TRACEPOINT_SYMBOL_GPL(sched_overutilized_tp);
 
+// 定义每个CPU的就绪队列(stuct rq)
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 
 #if defined(CONFIG_SCHED_DEBUG) && defined(CONFIG_JUMP_LABEL)
@@ -2634,7 +2635,7 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		atomic_dec(&task_rq(p)->nr_iowait);
 	}
 
-	cpu = select_task_rq(p, p->wake_cpu, SD_BALANCE_WAKE, wake_flags);
+	cpu = select_task_rq(p, p->wake_cpu, SD_BALANCE_WAKE, wake_flags);		// 选核给新唤醒的进程
 	if (task_cpu(p) != cpu) {
 		wake_flags |= WF_MIGRATED;
 		psi_ttwu_dequeue(p);
@@ -2650,7 +2651,7 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 
 #endif /* CONFIG_SMP */
 
-	ttwu_queue(p, cpu, wake_flags);
+	ttwu_queue(p, cpu, wake_flags);		// 通过select_task_rq()给被唤醒的进程选择CPU之后，再调用ttwu_queue()把被唤醒的进程插入到目标CPU的运行队列中
 unlock:
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 out:
@@ -2717,6 +2718,9 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 #ifdef CONFIG_SCHEDSTATS
 	/* Even if schedstat is disabled, there should not be garbage */
 	memset(&p->se.statistics, 0, sizeof(p->se.statistics));
+#endif
+#ifdef	CONFIG_VIP_SCHED
+	p->vip.vip_statistics = &p->se.statistics;		// TODO 
 #endif
 
 	RB_CLEAR_NODE(&p->dl.rb_node);
@@ -3609,6 +3613,7 @@ unsigned long long task_sched_runtime(struct task_struct *p)
  * This function gets called by the timer code, with HZ frequency.
  * We call it with interrupts disabled.
  */
+// 找到该 domain 中最繁忙的 sched group 和 CPU runqueue，将其上的任务 pull 到本 CPU，以便让系统的负载处于均衡的状态。
 void scheduler_tick(void)
 {
 	int cpu = smp_processor_id();
@@ -4170,6 +4175,14 @@ static void sched_update_worker(struct task_struct *tsk)
 	}
 }
 
+// 一个进程也可以主动释放CPU的控制权. 函数schedule()是一个调度函数, 它可以被一个进程主动调用, 从而调度其它进程占用CPU. 
+// 一旦这个主动放弃CPU的进程被重新调度占用CPU, 那么它将从上次停止执行的位置开始执行, 也就是说它将从调用schedule()的下一行代码处开始执行.
+// 在现代的Linux操作系统中, 进程一般都是用调用schedule的方法进入睡眠状态的, 下面的代码演示了如何让正在运行的进程进入睡眠状态。
+// sleeping_task = current;
+// set_current_state(TASK_INTERRUPTIBLE);
+// schedule();
+// func1();
+// /* Rest of the code ... */
 asmlinkage __visible void __sched schedule(void)
 {
 	struct task_struct *tsk = current;
@@ -4495,7 +4508,7 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 		if (oldprio < prio)
 			queue_flag |= ENQUEUE_HEAD;
 		p->sched_class = &rt_sched_class;
-	} else {
+	} else {// TODO
 		if (dl_prio(oldprio))
 			p->dl.dl_boosted = 0;
 		if (rt_prio(oldprio))
@@ -4562,7 +4575,7 @@ void set_user_nice(struct task_struct *p, long nice)
 #ifdef	CONFIG_VIP_SCHED
 	if (task_has_vip_policy(p)) {
        p->static_prio = NICE_TO_VIP_PRIO(nice);
-       set_vip_load_weight(p);	// my_TODO
+       set_vip_load_weight(p);
    } else
 #endif
    {
@@ -5747,6 +5760,7 @@ EXPORT_SYMBOL(__cond_resched_lock);
  * If you want to use yield() to be 'nice' for others, use cond_resched().
  * If you still want to use yield(), do not!
  */
+// 放弃任务入口 yield the current processor to other threads. 但99%可能你用错了 不要调用这个函数 --> wait_event cond_resched
 void __sched yield(void)
 {
 	set_current_state(TASK_RUNNING);
@@ -6105,6 +6119,12 @@ void init_idle(struct task_struct *idle, int cpu)
 
 	idle->state = TASK_RUNNING;
 	idle->se.exec_start = sched_clock();
+#ifdef	CONFIG_VIP_SCHED
+	idle->vip.exec_start = idle->se.exec_start;
+#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_LATENCYTOP)
+	idle->vip.vip_statistics = &idle->se.statistics;
+#endif
+#endif
 	idle->flags |= PF_IDLE;
 
 	kasan_unpoison_task_stack(idle);
@@ -6631,8 +6651,10 @@ static struct kmem_cache *task_group_cache __read_mostly;
 #endif
 
 DECLARE_PER_CPU(cpumask_var_t, load_balance_mask);
+DECLARE_PER_CPU(cpumask_var_t, vip_load_balance_mask);
 DECLARE_PER_CPU(cpumask_var_t, select_idle_mask);
 
+// https://www.cnblogs.com/tencent-cloud-native/p/14767478.html#:~:text=%E7%B2%BE%E7%BB%86%E7%9A%84%E6%8E%A7%E5%88%B6%E3%80%82-,%E8%B0%83%E5%BA%A6%E5%99%A8%E5%88%9D%E5%A7%8B%E5%8C%96(sched_init),-%E4%B8%8B%E9%9D%A2%E8%BF%9B%E5%85%A5%E6%AD%A3
 void __init sched_init(void)
 {
 	unsigned long ptr = 0;
@@ -6641,6 +6663,9 @@ void __init sched_init(void)
 	wait_bit_init();
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
+	ptr += 2 * nr_cpu_ids * sizeof(void **);
+#endif
+#ifdef CONFIG_VIP_GROUP_SCHED
 	ptr += 2 * nr_cpu_ids * sizeof(void **);
 #endif
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -6657,6 +6682,14 @@ void __init sched_init(void)
 		ptr += nr_cpu_ids * sizeof(void **);
 
 #endif /* CONFIG_FAIR_GROUP_SCHED */
+#ifdef CONFIG_VIP_GROUP_SCHED
+		root_task_group.se = (struct sched_entity **)ptr;
+		ptr += nr_cpu_ids * sizeof(void **);
+
+		root_task_group.vip_rq = (struct vip_rq **)ptr;
+		ptr += nr_cpu_ids * sizeof(void **);
+	
+#endif /* CONFIG_VIP_GROUP_SCHED */
 #ifdef CONFIG_RT_GROUP_SCHED
 		root_task_group.rt_se = (struct sched_rt_entity **)ptr;
 		ptr += nr_cpu_ids * sizeof(void **);
@@ -6670,6 +6703,10 @@ void __init sched_init(void)
 	for_each_possible_cpu(i) {
 		per_cpu(load_balance_mask, i) = (cpumask_var_t)kzalloc_node(
 			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
+#ifdef CONFIG_VIP_SCHED
+		per_cpu(vip_load_balance_mask, i) = (cpumask_var_t)kzalloc_node(		// TODO vip_load_balance_mask
+			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
+#endif
 		per_cpu(select_idle_mask, i) = (cpumask_var_t)kzalloc_node(
 			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
 	}
@@ -6677,9 +6714,11 @@ void __init sched_init(void)
 
 	init_rt_bandwidth(&def_rt_bandwidth, global_rt_period(), global_rt_runtime());
 	init_dl_bandwidth(&def_dl_bandwidth, global_rt_period(), global_rt_runtime());
-
+#ifdef CONFIG_VIP_SCHED
+	init_vip_bandwidth(&def_vip_bandwidth, global_vip_period(), global_vip_runtime());		// TODO 
+#endif
 #ifdef CONFIG_SMP
-	init_defrootdomain();
+	init_defrootdomain();		// 初始化调度域根域
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -6709,6 +6748,8 @@ void __init sched_init(void)
 		init_dl_rq(&rq->dl);
 #ifdef  CONFIG_VIP_SCHED
 		rq->vip_nr_running = 0;
+		rq->vip_blocked_clock = 0;		// TODO
+		rq->do_lb = 0;				// TODO 
 		init_vip_rq(&rq->vip);		// vip.c - 初始化vip_rq的红黑树
 #endif
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -6737,6 +6778,15 @@ void __init sched_init(void)
 		init_cfs_bandwidth(&root_task_group.cfs_bandwidth);
 		init_tg_cfs_entry(&root_task_group, &rq->cfs, NULL, i, NULL);
 #endif /* CONFIG_FAIR_GROUP_SCHED */
+#ifdef CONFIG_VIP_GROUP_SCHED		// TODO
+		root_task_group.vip_shares = ROOT_TASK_GROUP_VIP_LOAD;
+		INIT_LIST_HEAD(&rq->leaf_vip_rq_list);
+		init_tg_vip_entry(&root_task_group, &rq->vip, NULL, i, NULL);
+#endif /* CONFIG_VIP_GROUP_SCHED */
+
+#ifdef CONFIG_VIP_SCHED
+		rq->vip.vip_runtime = def_vip_bandwidth.vip_runtime;
+#endif
 
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -6755,12 +6805,24 @@ void __init sched_init(void)
 		rq->idle_stamp = 0;
 		rq->avg_idle = 2*sysctl_sched_migration_cost;
 		rq->max_idle_balance_cost = sysctl_sched_migration_cost;
-
+#ifdef CONFIG_VIP_SCHED		// TODO
+		rq->active_balance_vip = 0;
+		rq->next_balance_vip = jiffies + 1;
+		rq->push_cpu_vip = 0;
+		rq->idle_vip_stamp = 0;
+		rq->avg_idle_vip = 2*sysctl_sched_migration_cost;
+		INIT_LIST_HEAD(&rq->vip_tasks);
+#endif
 		INIT_LIST_HEAD(&rq->cfs_tasks);
 
 		rq_attach_root(rq, &def_root_domain);
 #ifdef CONFIG_NO_HZ_COMMON
+#ifdef CONFIG_VIP_SCHE		// TODO
+		rq->last_vip_load_update_tick = jiffies;
+#else
 		rq->last_load_update_tick = jiffies;
+#endif
+// TODO What about here
 		rq->last_blocked_load_update_tick = jiffies;
 		atomic_set(&rq->nohz_flags, 0);
 #endif
@@ -6791,6 +6853,9 @@ void __init sched_init(void)
 	idle_thread_set_boot_cpu();
 #endif
 	init_sched_fair_class();
+#ifdef CONFIG_VIP_SCHED
+	init_sched_vip_class();			// TODO
+#endif
 
 	init_schedstats();
 
@@ -6921,6 +6986,9 @@ void normalize_rt_tasks(void)
 			continue;
 
 		p->se.exec_start = 0;
+#ifdef	CONFIG_VIP_SCHED
+		p->vip.exec_start = 0;
+#endif
 		schedstat_set(p->se.statistics.wait_start,  0);
 		schedstat_set(p->se.statistics.sleep_start, 0);
 		schedstat_set(p->se.statistics.block_start, 0);
