@@ -10,6 +10,8 @@
  * Very-Important Scheduling Class (mapped to the SCHED_VIP policy)
  */
 #include "sched.h"
+#include "fair.h"	// vruntime related functions sharing
+#include "vip.h"	// Contains vip_policy & task_has_vip_policy
 
 void set_vip_load_weight(struct task_struct *p)
 {
@@ -50,6 +52,12 @@ static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
 	return vip_se->vip_rq;
 }
 
+/* runqueue "owned" by this group */
+static inline struct vip_rq *group_vip_rq(struct sched_entity *grp)
+{
+	return grp->my_q;
+}
+
 static inline struct vip_rq *task_vip_rq(struct task_struct *p)
 {
 	return p->vip.vip_rq;
@@ -79,6 +87,12 @@ static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
 	struct rq *rq = task_rq(p);
 
 	return &rq->vip;
+}
+
+/* runqueue "owned" by this group */
+static inline struct vip_rq *group_vip_rq(struct sched_entity *grp)
+{
+	return NULL;
 }
 
 static inline struct vip_rq *task_vip_rq(struct task_struct *p)
@@ -1080,36 +1094,25 @@ static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct 
 	struct task_struct *p;
 	struct vip_rq *vip_rq = &rq->vip;
 	struct sched_entity *vip_se;
-	int new_tasks = -1;
 
-again:
 	if (!vip_rq->nr_running)
-		goto idle;
+		return NULL;
 
-	put_prev_task(rq, prev);
+// TODO: Group scheduling & SMP 
 
-	vip_se = pick_next_vip_entity(vip_rq);
-	set_next_vip_entity(vip_rq, vip_se);
+	if (prev)
+		put_prev_task(rq, prev);
 
-	p = vip_task_of(vip_se);
+	do {
+		vip_se = pick_next_vip_entity(cfs_rq, NULL);
+		set_next_vip_entity(cfs_rq, vip_se);
+		vip_rq = group_vip_rq(vip_se);
+	} while (vip_rq);
+
+	p = task_of(vip_se);
 
 	return p;
 
-idle:
-	new_tasks = idle_balance(rq, rf);
-
-	/*
-	 * Because idle_balance() releases (and re-acquires) rq->lock, it is
-	 * possible for any higher priority task to appear. In that case we
-	 * must re-start the pick_next_entity() loop.
-	 */
-	if (new_tasks < 0)
-		return RETRY_TASK;
-
-	if (new_tasks > 0)
-		goto again;
-
-	return NULL;
 }
 
 /*
