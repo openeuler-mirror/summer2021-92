@@ -22,6 +22,7 @@
 #include <linux/sched/numa_balancing.h>
 #include <linux/sched/prio.h>
 #include <linux/sched/rt.h>
+#include <linux/sched/vip.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/smt.h>
 #include <linux/sched/stat.h>
@@ -74,8 +75,6 @@
 
 #include "cpupri.h"
 #include "cpudeadline.h"
-
-#include "vip.h"	// Contains vip_policy & task_has_vip_policy
 
 #ifdef CONFIG_SCHED_DEBUG
 # define SCHED_WARN_ON(x)	WARN_ONCE(x, #x)
@@ -864,9 +863,6 @@ struct rq {
 	 * remote CPUs use both these fields when doing load calculation.
 	 */
 	unsigned int		nr_running;
-#ifdef CONFIG_VIP_SCHED
-	unsigned int vip_nr_running;
-#endif
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned int		nr_numa_running;
 	unsigned int		nr_preferred_running;

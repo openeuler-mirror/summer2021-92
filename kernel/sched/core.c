@@ -9,7 +9,9 @@
 #include <linux/sched/vip.h>
 
 #include "sched.h"
+#ifdef CONFIG_VIP_SCHED
 #include "vip.h"
+#endif
 
 #include <linux/nospec.h>
 
@@ -6817,7 +6819,7 @@ void __init sched_init(void)
 
 		rq_attach_root(rq, &def_root_domain);
 #ifdef CONFIG_NO_HZ_COMMON
-#ifdef CONFIG_VIP_SCHE		// TODO
+#ifdef CONFIG_VIP_SCHED		// TODO
 		rq->last_vip_load_update_tick = jiffies;
 #else
 		rq->last_load_update_tick = jiffies;

@@ -12,6 +12,8 @@
 #include <linux/sched.h>
 #include <uapi/linux/sched.h>
 
+// TODO struct vip_bandwidth {
+
 struct vip_rq {
 	struct load_weight load;
 	unsigned int nr_running, h_nr_running;
@@ -36,7 +38,7 @@ struct vip_rq {
 	unsigned int nr_spread_over;
 #endif
 
-#ifdef CONFIG_SMP
+#ifdef CONFIG_SMP		// TODO
 /*
  * Load-tracking only depends on SMP, VIP_GROUP_SCHED dependency below may be
  * removed when useful for applications beyond shares distribution (e.g.
@@ -52,6 +54,28 @@ struct vip_rq {
 	 */
 	unsigned long h_load;
 #endif /* CONFIG_SMP */
+#ifdef CONFIG_VIP_GROUP_SCHED
+	struct rq *rq;  /* cpu runqueue to which this vip_rq is attached */
+
+	/*
+	 * leaf vip_rqs are those that hold tasks (lowest schedulable entity in
+	 * a hierarchy). Non-leaf lrqs hold other higher schedulable entities
+	 * (like users, containers etc.)
+	 *
+	 * leaf_vip_rq_list ties together list of leaf vip_rq's in a cpu. This
+	 * list is used during load balance.
+	 */
+	int on_list;
+	struct list_head leaf_vip_rq_list;
+	struct task_group *tg;  /* group that "owns" this runqueue */
+#endif /* CONFIG_VIP_GROUP_SCHED */
+
+	int vip_throttled;
+	u64 vip_time;
+	u64 vip_runtime;
+
+	u64 throttled_clock, throttled_clock_task;
+	u64 throttled_clock_task_time;
 };
 
 
