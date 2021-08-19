@@ -55,7 +55,7 @@ static inline struct vip_rq *vip_rq_of(struct sched_entity *vip_se)
 /* runqueue "owned" by this group */
 static inline struct vip_rq *group_vip_rq(struct sched_entity *grp)
 {
-	return grp->my_q;
+	return grp->vip_my_q;
 }
 
 static inline struct vip_rq *task_vip_rq(struct task_struct *p)
@@ -249,14 +249,15 @@ static void update_vip_min_vruntime(struct vip_rq *vip_rq)
 // 计算在这个vip队列中一个周期内(调度时延内)分配给这个权重的进程的真实运行时间
 static u64 sched_vip_slice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
-	u64 slice = __sched_period(vip_rq->nr_running + !vip_se->on_rq);
+	u64 slice = __sched_period(vip_rq->nr_running + !vip_se->on_rq);	// 根据当前就绪进程个数计算调度周期，默认情况下，进程不超过8个情况下，调度周期默认6ms
 
+	// for循环根据vip_se->parent链表往上计算⽐例
 	for_each_sched_vip_entity(vip_se) {
 		struct load_weight *load;
 		struct load_weight lw;
 
 		vip_rq = vip_rq_of(vip_se);
-		load = &vip_rq->load;
+		load = &vip_rq->load;	// 获得vip_se依附的vip_rq的负载信息
 
 		if (unlikely(!vip_se->on_rq)) {
 			lw = vip_rq->load;
@@ -264,7 +265,7 @@ static u64 sched_vip_slice(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 			update_load_add(&lw, vip_se->load.weight);
 			load = &lw;
 		}
-		slice = __calc_delta(slice, vip_se->load.weight, load);
+		slice = __calc_delta(slice, vip_se->load.weight, load);		// 计算slice = slice * vip_se->load.weight / vip_rq->load.weight的值
 	}
 	return slice;
 }
@@ -426,6 +427,229 @@ account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 
 	vip_rq->nr_running--;
 }
+
+// static void reweight_vip_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
+// 			    unsigned long weight, unsigned long runnable)
+// {
+// 	if (se->on_rq) {
+// 		/* commit outstanding execution time */
+// 		if (cfs_rq->curr == se)
+// 			update_curr(cfs_rq);
+// 		account_entity_dequeue(cfs_rq, se);
+// 		dequeue_runnable_load_avg(cfs_rq, se);
+// 	}
+// 	dequeue_load_avg(cfs_rq, se);
+
+// 	se->runnable_weight = runnable;
+// 	update_load_set(&se->load, weight);
+
+// #ifdef CONFIG_SMP
+// 	do {
+// 		u32 divider = LOAD_AVG_MAX - 1024 + se->avg.period_contrib;
+
+// 		se->avg.load_avg = div_u64(se_weight(se) * se->avg.load_sum, divider);
+// 		se->avg.runnable_load_avg =
+// 			div_u64(se_runnable(se) * se->avg.runnable_load_sum, divider);
+// 	} while (0);
+// #endif
+
+// 	enqueue_load_avg(cfs_rq, se);
+// 	if (se->on_rq) {
+// 		account_entity_enqueue(cfs_rq, se);
+// 		enqueue_runnable_load_avg(cfs_rq, se);
+// 	}
+// }
+
+// #ifdef CONFIG_VIP_GROUP_SCHED
+// #ifdef CONFIG_SMP
+// /*
+//  * All this does is approximate the hierarchical proportion which includes that
+//  * global sum we all love to hate.
+//  *
+//  * That is, the weight of a group entity, is the proportional share of the
+//  * group weight based on the group runqueue weights. That is:
+//  *
+//  *                     tg->weight * grq->load.weight
+//  *   ge->load.weight = -----------------------------               (1)
+//  *			  \Sum grq->load.weight
+//  *
+//  * Now, because computing that sum is prohibitively expensive to compute (been
+//  * there, done that) we approximate it with this average stuff. The average
+//  * moves slower and therefore the approximation is cheaper and more stable.
+//  *
+//  * So instead of the above, we substitute:
+//  *
+//  *   grq->load.weight -> grq->avg.load_avg                         (2)
+//  *
+//  * which yields the following:
+//  *
+//  *                     tg->weight * grq->avg.load_avg
+//  *   ge->load.weight = ------------------------------              (3)
+//  *				tg->load_avg
+//  *
+//  * Where: tg->load_avg ~= \Sum grq->avg.load_avg
+//  *
+//  * That is shares_avg, and it is right (given the approximation (2)).
+//  *
+//  * The problem with it is that because the average is slow -- it was designed
+//  * to be exactly that of course -- this leads to transients in boundary
+//  * conditions. In specific, the case where the group was idle and we start the
+//  * one task. It takes time for our CPU's grq->avg.load_avg to build up,
+//  * yielding bad latency etc..
+//  *
+//  * Now, in that special case (1) reduces to:
+//  *
+//  *                     tg->weight * grq->load.weight
+//  *   ge->load.weight = ----------------------------- = tg->weight   (4)
+//  *			    grp->load.weight
+//  *
+//  * That is, the sum collapses because all other CPUs are idle; the UP scenario.
+//  *
+//  * So what we do is modify our approximation (3) to approach (4) in the (near)
+//  * UP case, like:
+//  *
+//  *   ge->load.weight =
+//  *
+//  *              tg->weight * grq->load.weight
+//  *     ---------------------------------------------------         (5)
+//  *     tg->load_avg - grq->avg.load_avg + grq->load.weight
+//  *
+//  * But because grq->load.weight can drop to 0, resulting in a divide by zero,
+//  * we need to use grq->avg.load_avg as its lower bound, which then gives:
+//  *
+//  *
+//  *                     tg->weight * grq->load.weight
+//  *   ge->load.weight = -----------------------------		   (6)
+//  *				tg_load_avg'
+//  *
+//  * Where:
+//  *
+//  *   tg_load_avg' = tg->load_avg - grq->avg.load_avg +
+//  *                  max(grq->load.weight, grq->avg.load_avg)
+//  *
+//  * And that is shares_weight and is icky. In the (near) UP case it approaches
+//  * (4) while in the normal case it approaches (3). It consistently
+//  * overestimates the ge->load.weight and therefore:
+//  *
+//  *   \Sum ge->load.weight >= tg->weight
+//  *
+//  * hence icky!
+//  */
+// static long calc_vip_group_shares(struct vip_rq *vip_rq)
+// {
+// 	long tg_weight, tg_shares, load, shares;
+// 	struct task_group *tg = vip_rq->tg;
+
+// 	tg_shares = READ_ONCE(tg->vip_shares);
+
+// 	load = max(scale_load_down(vip_rq->load.weight), vip_rq->avg.load_avg);
+
+// 	tg_weight = atomic_long_read(&tg->load_avg);
+
+// 	/* Ensure tg_weight >= load */
+// 	tg_weight -= vip_rq->tg_load_avg_contrib;
+// 	tg_weight += load;
+
+// 	shares = (tg_shares * load);
+// 	if (tg_weight)
+// 		shares /= tg_weight;
+
+// 	/*
+// 	 * MIN_SHARES has to be unscaled here to support per-CPU partitioning
+// 	 * of a group with small tg->shares value. It is a floor value which is
+// 	 * assigned as a minimum load.weight to the sched_entity representing
+// 	 * the group on a CPU.
+// 	 *
+// 	 * E.g. on 64-bit for a group with tg->shares of scale_load(15)=15*1024
+// 	 * on an 8-core system with 8 tasks each runnable on one CPU shares has
+// 	 * to be 15*1024*1/8=1920 instead of scale_load(MIN_SHARES)=2*1024. In
+// 	 * case no task is runnable on a CPU MIN_SHARES=2 should be returned
+// 	 * instead of 0.
+// 	 */
+// 	return clamp_t(long, shares, MIN_SHARES, tg_shares);
+// }
+
+// /*
+//  * This calculates the effective runnable weight for a group entity based on
+//  * the group entity weight calculated above.
+//  *
+//  * Because of the above approximation (2), our group entity weight is
+//  * an load_avg based ratio (3). This means that it includes blocked load and
+//  * does not represent the runnable weight.
+//  *
+//  * Approximate the group entity's runnable weight per ratio from the group
+//  * runqueue:
+//  *
+//  *					     grq->avg.runnable_load_avg
+//  *   ge->runnable_weight = ge->load.weight * -------------------------- (7)
+//  *						 grq->avg.load_avg
+//  *
+//  * However, analogous to above, since the avg numbers are slow, this leads to
+//  * transients in the from-idle case. Instead we use:
+//  *
+//  *   ge->runnable_weight = ge->load.weight *
+//  *
+//  *		max(grq->avg.runnable_load_avg, grq->runnable_weight)
+//  *		-----------------------------------------------------	(8)
+//  *		      max(grq->avg.load_avg, grq->load.weight)
+//  *
+//  * Where these max() serve both to use the 'instant' values to fix the slow
+//  * from-idle and avoid the /0 on to-idle, similar to (6).
+//  */
+// static long calc_vip_group_runnable(struct vip_rq *vip_rq, long shares)
+// {
+// 	long runnable, load_avg;
+
+// 	load_avg = max(vip_rq->avg.load_avg,
+// 		       scale_load_down(vip_rq->load.weight));
+
+// 	runnable = max(vip_rq->avg.runnable_load_avg,
+// 		       scale_load_down(vip_rq->runnable_weight));
+
+// 	runnable *= shares;
+// 	if (load_avg)
+// 		runnable /= load_avg;
+
+// 	return clamp_t(long, runnable, MIN_SHARES, shares);
+// }
+// #endif /* CONFIG_SMP */
+
+// static inline int throttled_hierarchy(struct vip_rq *vip_rq);
+
+// /*
+//  * Recomputes the group entity based on the current state of its group
+//  * runqueue.
+//  */
+// // 更新VIP group sched_entity的权重信息
+// static void update_vip_group(struct sched_entity *vip_se)
+// {
+// 	struct vip_rq *gvip_rq = group_vip_rq(vip_se);
+// 	long shares, runnable;
+
+// 	if (!gvip_rq)
+// 		return;
+
+// 	if (vip_throttled_hierarchy(gvip_rq))	// ?
+// 		return;
+
+// #ifndef CONFIG_SMP
+// 	runnable = shares = READ_ONCE(gvip_rq->tg->vip_shares);
+
+// 	if (likely(vip_se->load.weight == shares))
+// 		return;
+// #else
+// 	shares   = calc_vip_group_shares(gvip_rq);
+// 	runnable = calc_vip_group_runnable(gvip_rq, shares);
+// #endif
+
+// 	reweight_vip_entity(vip_rq_of(se), se, shares, runnable);
+// }
+
+// #else /* CONFIG_VIP_GROUP_SCHED */
+// static inline void update_vip_group(struct sched_entity *vip_se)
+// {
+// }
+// #endif /* CONFIG_VIP_GROUP_SCHED */
 
 static void check_vip_spread(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
@@ -720,7 +944,22 @@ vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
 
 	if (vip_rq->nr_running > 1)
 		check_preempt_tick_vip(vip_rq, curr);
-}	
+}
+
+// /**************************************************
+//  * VIP bandwidth control machinery
+//  */
+
+// #ifdef CONFIG_VIP_BANDWIDTH
+// /* check whether vip_rq, or any parent, is throttled */
+// static inline int vip_throttled_hierarchy(struct vip_rq *vip_rq)
+// {
+// 	return vip_bandwidth_used() && vip_rq->throttle_count;
+// }
+
+// #else	/* CONFIG_VIP_BANDWIDTH */
+
+// #endif	/* CONFIG_VIP_BANDWIDTH */
 
 /*
  * The enqueue_task method is called before nr_running is
@@ -1104,8 +1343,8 @@ static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct 
 		put_prev_task(rq, prev);
 
 	do {
-		vip_se = pick_next_vip_entity(cfs_rq, NULL);
-		set_next_vip_entity(cfs_rq, vip_se);
+		vip_se = pick_next_vip_entity(vip_rq, NULL);
+		set_next_vip_entity(vip_rq, vip_se);
 		vip_rq = group_vip_rq(vip_se);
 	} while (vip_rq);
 
@@ -1361,8 +1600,9 @@ const struct sched_class vip_sched_class = {
 #ifdef CONFIG_SMP
 	// .balance		= balance_vip,
 	.select_task_rq		= select_task_rq_vip,
-	// .migrate_task_rq	= migrate_task_rq_vip,
-
+#ifdef CONFIG_VIP_GROUP_SCHED
+	.migrate_task_rq	= migrate_task_rq_vip,
+#endif
 	.rq_online		= rq_online_vip,		// oneline offline 没必要
 	.rq_offline		= rq_offline_vip,
 
@@ -1386,9 +1626,9 @@ const struct sched_class vip_sched_class = {
 
 	.update_curr		= update_curr_vip,		// 更新当前运行任务的 vruntime & viprq的min_vruntime
 
-// #ifdef CONFIG_VIP_GROUP_SCHED
-// 	.task_change_group	= task_change_group_vip,
-// #endif
+#ifdef CONFIG_VIP_GROUP_SCHED
+	.task_change_group	= task_change_group_vip,
+#endif
 
 // #ifdef CONFIG_UCLAMP_TASK
 // 	.uclamp_enabled		= 1,

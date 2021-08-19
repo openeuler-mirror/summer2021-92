@@ -893,6 +893,11 @@ config FAIR_GROUP_SCHED
 	depends on CGROUP_SCHED
 	default CGROUP_SCHED
 
+config VIP_GROUP_SCHED
+	bool "Group scheduling for SCHED_VIP"
+	depends on CGROUP_SCHED && VIP_SCHED
+	default CGROUP_SCHED
+
 config CFS_BANDWIDTH
 	bool "CPU bandwidth provisioning for FAIR_GROUP_SCHED"
 	depends on FAIR_GROUP_SCHED

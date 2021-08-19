@@ -462,21 +462,22 @@ struct sched_entity {
 	u64				nr_migrations;
 
 	struct sched_statistics		statistics;
-#ifdef	CONFIG_BT_SCHED
+#ifdef	CONFIG_VIP_SCHED
 	struct sched_statistics		*vip_statistics;
 #endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	int				depth;
-	struct sched_entity		*parent;
-	/* rq on which this entity is (to be) queued: */
+	struct sched_entity		*parent;	// 当前调度单元归属于某个父调度单元
+	/* rq on which this entity is (to be) queued: */  // 当前调度单元归属的父调度单元的调度队列，即当前调度单元插入的队列
 	struct cfs_rq			*cfs_rq;
-	/* rq "owned" by this entity/group: */
+	/* rq "owned" by this entity/group: */	// 当前调度单元的调度队列，即管理子调度单元的队列，如果调度单元是task_group，my_q才会有值
 	struct cfs_rq			*my_q;
 #endif
 
 #ifdef CONFIG_VIP_GROUP_SCHED
-// TODO
+	struct vip_rq			*vip_rq;			// 组调度中该调度单元归属的vip_rq
+	struct vip_rq			*vip_my_q;			// 组调度中该调度单元若为group se，则会拥有自己的调度队列
 #endif
 
 #ifdef CONFIG_SMP
@@ -487,6 +488,9 @@ struct sched_entity {
 	 * collide with read-mostly values above.
 	 */
 	struct sched_avg		avg;
+#ifdef CONFIG_VIP_GROUP_SCHED		// Load Tracking
+	struct sched_avg		vip_agv;
+#endif
 #endif
 };
 

@@ -2906,6 +2906,7 @@ void reweight_task(struct task_struct *p, int prio)
 	load->inv_weight = sched_prio_to_wmult[prio];
 }
 
+// ==============================================================================================
 #ifdef CONFIG_FAIR_GROUP_SCHED
 #ifdef CONFIG_SMP
 /*
@@ -3095,6 +3096,7 @@ static inline void update_cfs_group(struct sched_entity *se)
 {
 }
 #endif /* CONFIG_FAIR_GROUP_SCHED */
+// ==============================================================================================
 
 static inline void cfs_rq_util_change(struct cfs_rq *cfs_rq, int flags)
 {

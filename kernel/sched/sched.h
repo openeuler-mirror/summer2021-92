@@ -341,18 +341,19 @@ extern struct list_head task_groups;
 struct cfs_bandwidth {
 #ifdef CONFIG_CFS_BANDWIDTH
 	raw_spinlock_t		lock;
-	ktime_t			period;
-	u64			quota;
-	u64			runtime;
+	ktime_t			period;		// 设定的定时器周期时间，周期到了进行下一轮带宽控制
+	u64			quota;		// 一个period周期内，一个组 可以使用的CPU限额(所有的用户组进程运行的时间累加在一起，保证总的运行时间小于quota)
+							// 每个用户组会管理CPU个数的就绪队列group cfs_rq。每个group cfs_rq中也有限额时间，该限额时间是从全局用户组quota中申请
+	u64			runtime;	// 记录剩余限额时间，在每次定时器回调函数中更新值为quota
 	s64			hierarchical_quota;
 
 	u8			idle;
 	u8			period_active;
 	u8			distribute_running;
 	u8			slack_started;
-	struct hrtimer		period_timer;
+	struct hrtimer		period_timer;	// 高精度定时器
 	struct hrtimer		slack_timer;
-	struct list_head	throttled_cfs_rq;
+	struct list_head	throttled_cfs_rq;	// 所有被throttle的cfs_rq挂入此链表，在定时器的回调函数中遍历链表执行unthrottle cfs_rq操作
 
 	/* Statistics: */
 	int			nr_periods;
@@ -367,10 +368,10 @@ struct task_group {
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* schedulable entities of this group on each CPU */
-	struct sched_entity	**se;
+	struct sched_entity	**se;	// 普通进程调度单元，之所以用调度单元，因为被调度的可能是一个进程，也可能是一组进程
 	/* runqueue "owned" by this group on each CPU */
-	struct cfs_rq		**cfs_rq;
-	unsigned long		shares;
+	struct cfs_rq		**cfs_rq;	// 公平调度队列们
+	unsigned long		shares;		// 调度实体有权重的概念，以权重的比例分配CPU时间。用户组同样有权重的概念，share就是task_group的权重。
 
 #ifdef	CONFIG_SMP
 	/*
@@ -378,20 +379,31 @@ struct task_group {
 	 * it in its own cacheline separated from the fields above which
 	 * will also be accessed at each tick.
 	 */
-	atomic_long_t		load_avg ____cacheline_aligned;
+	atomic_long_t		load_avg ____cacheline_aligned;		//  整个⽤户组的负载贡献总和
 #endif
+#endif
+
+#ifdef CONFIG_VIP_GROUP_SCHED
+	struct sched_entity **vip;
+	struct vip_rq **vip_rq;
+	unsigned long vip_shares;
+
+	// atomic64_t vip_load_avg;
+	
+	struct vip_bandwidth	vip_bandwidth;	// VIP进程占用CPU时间的带宽（或者说比例）
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
 	struct sched_rt_entity	**rt_se;
 	struct rt_rq		**rt_rq;
 
-	struct rt_bandwidth	rt_bandwidth;
+	struct rt_bandwidth	rt_bandwidth;	// 实时进程占用CPU时间的带宽（或者说比例）
 #endif
 
 	struct rcu_head		rcu;
 	struct list_head	list;
 
+// task_group呈树状结构组织，有父节点，兄弟链表，孩子链表，内核里面的根节点是root_task_group
 	struct task_group	*parent;
 	struct list_head	siblings;
 	struct list_head	children;
@@ -619,17 +631,17 @@ struct rt_rq {
 #endif /* CONFIG_SMP */
 	int			rt_queued;
 
-	int			rt_throttled;
-	u64			rt_time;
-	u64			rt_runtime;
+	int			rt_throttled;	// 当前队列的实时调度是否受限
+	u64			rt_time;		// 当前队列的累计运行时间
+	u64			rt_runtime;		// 当前队列的最大运行时间
 	/* Nests inside the rq lock: */
 	raw_spinlock_t		rt_runtime_lock;
 
 #ifdef CONFIG_RT_GROUP_SCHED
 	unsigned long		rt_nr_boosted;
 
-	struct rq		*rq;
-	struct task_group	*tg;
+	struct rq		*rq;		// 当前实时调度队列归属调度队列
+	struct task_group	*tg;	// 当前实时调度队列归属的调度单元
 #endif
 };
 
