@@ -6643,7 +6643,7 @@ int in_sched_functions(unsigned long addr)
 #ifdef CONFIG_CGROUP_SCHED
 /*
  * Default task group.
- * Every task in system belongs to this group at bootup.
+ * Every task in system belongs to this group at bootup.		// 系统中的每个任务在启动时都属于这个组
  */
 struct task_group root_task_group;
 LIST_HEAD(task_groups);
@@ -6754,6 +6754,19 @@ void __init sched_init(void)
 		rq->do_lb = 0;				// TODO 
 		init_vip_rq(&rq->vip);		// vip.c - 初始化vip_rq的红黑树
 #endif
+
+/*
+ * CFS的组调度(group_sched)，可以通过cpu cgroup来对CFS进行进行控制
+ * 可以通过cpu.shares来提供group之间的CPU比例控制(让不同的cgroup按照对应
+ * 的比例来分享CPU)，也可以通过cpu.cfs_quota_us来进行配额设定(与RT的
+ * 带宽控制类似)。CFS group_sched带宽控制是容器实现的基础底层技术之一
+ *
+ * root_task_group 是默认的根task_group，其他的cpu cgroup都会以它做为
+ * parent或者ancestor。这里的初始化将root_task_group与rq的cfs运行队列
+ * 关联起来，这里做的很有意思，直接将root_task_group->cfs_rq[cpu] = &rq->cfs
+ * 这样在cpu cgroup根下的进程或者cgroup tg的sched_entity会直接加入到rq->cfs
+ * 队列里，可以减少一层查找开销。
+ */
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
@@ -7099,6 +7112,9 @@ struct task_group *sched_create_group(struct task_group *parent)
 	if (!alloc_fair_sched_group(tg, parent))
 		goto err;
 
+	if (!alloc_vip_sched_group(tg, parent))			// 创建VIP调度器需要的组调度数据结构
+		goto err;
+
 	if (!alloc_rt_sched_group(tg, parent))
 		goto err;
 
@@ -7169,7 +7185,7 @@ static void sched_change_group(struct task_struct *tsk, int type)
 	tg = autogroup_task_group(tsk, tg);
 	tsk->sched_task_group = tg;
 
-#ifdef CONFIG_FAIR_GROUP_SCHED
+#if (defined CONFIG_FAIR_GROUP_SCHED) || (defined CONFIG_VIP_GROUP_SCHED)
 	if (tsk->sched_class->task_change_group)
 		tsk->sched_class->task_change_group(tsk, type);
 	else
@@ -7198,9 +7214,9 @@ void sched_move_task(struct task_struct *tsk)
 	queued = task_on_rq_queued(tsk);
 
 	if (queued)
-		dequeue_task(rq, tsk, queue_flags);
+		dequeue_task(rq, tsk, queue_flags);		// 如果该进程在就绪队列中，那么要让该进程暂时先退出就绪队列
 	if (running)
-		put_prev_task(rq, tsk);
+		put_prev_task(rq, tsk);		// 如果该进程正在运行中， 刚才已经调用dequeue_task()函数把进程退出就绪队列，现在只能继续添加回到就绪队列中
 
 	sched_change_group(tsk, TASK_MOVE_GROUP);
 

@@ -41,4 +41,6 @@ unsigned long calc_delta_mine(unsigned long delta_exec,	unsigned long weight, st
 
 extern u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw);
 
+void task_change_group_fair(struct task_struct *p, int type)
+
 #endif

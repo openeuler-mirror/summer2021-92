@@ -440,6 +440,12 @@ struct task_group {
 #define MAX_SHARES		(1UL << 18)
 #endif
 
+#ifdef CONFIG_VIP_GROUP_SCHED
+#define ROOT_TASK_GROUP_VIP_LOAD        NICE_0_LOAD
+#define MIN_VIP_SHARES  (1UL <<  1)
+#define MAX_VIP_SHARES  (1UL << 18)
+#endif
+
 typedef int (*tg_visitor)(struct task_group *, void *);
 
 extern int walk_tg_tree_from(struct task_group *from,
@@ -963,6 +969,7 @@ struct rq {
 	int			online;
 
 	struct list_head cfs_tasks;
+	struct list_head vip_tasks;
 
 	struct sched_avg	avg_rt;
 	struct sched_avg	avg_dl;
@@ -1639,6 +1646,7 @@ static inline u64 global_rt_runtime(void)
 	return (u64)sysctl_sched_rt_runtime * NSEC_PER_USEC;
 }
 
+// 数判断该进程是否正在运行
 static inline int task_current(struct rq *rq, struct task_struct *p)
 {
 	return rq->curr == p;

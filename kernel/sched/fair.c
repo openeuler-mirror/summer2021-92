@@ -10549,7 +10549,7 @@ static void task_move_group_fair(struct task_struct *p)
 	attach_task_cfs_rq(p);
 }
 
-static void task_change_group_fair(struct task_struct *p, int type)
+void task_change_group_fair(struct task_struct *p, int type)
 {
 	switch (type) {
 	case TASK_SET_GROUP:
@@ -10663,6 +10663,7 @@ void unregister_fair_sched_group(struct task_group *tg)
 	}
 }
 
+// 组调度里初始化的调度实体 se的cfs_rq成员指向系统中per-CPU变量rq的CFS调度队列，my_q 成员指向组调度(task_group)里自身的CFS调度队列
 void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 			struct sched_entity *se, int cpu,
 			struct sched_entity *parent)

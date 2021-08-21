@@ -16,6 +16,7 @@
 
 struct vip_rq {
 	struct load_weight load;
+	// unsigned long		runnable_weight;
 	unsigned int nr_running, h_nr_running;
 	unsigned long nr_uninterruptible;
 
@@ -26,7 +27,7 @@ struct vip_rq {
 #endif
 
 	struct rb_root_cached tasks_timeline;
-	struct rb_node *rb_leftmost;
+	struct rb_node *rb_leftmost;		// ?? TODO -- Necessary?
 
 	/*
 	 * 'curr' points to currently running entity on this vip_rq.
@@ -39,21 +40,21 @@ struct vip_rq {
 #endif
 
 #ifdef CONFIG_SMP		// TODO
-/*
- * Load-tracking only depends on SMP, VIP_GROUP_SCHED dependency below may be
- * removed when useful for applications beyond shares distribution (e.g.
- * load-balance).
- */
+	/*
+	 * VIP load tracking
+	 */
+	struct sched_avg	avg;
 
-
+#ifdef CONFIG_VIP_GROUP_SCHED
 	/*
 	 *   h_load = weight * f(tg)
 	 *
 	 * Where f(tg) is the recursive weight fraction assigned to
 	 * this group.
 	 */
-	unsigned long h_load;
+#endif /* CONFIG_VIP_GROUP_SCHED */
 #endif /* CONFIG_SMP */
+
 #ifdef CONFIG_VIP_GROUP_SCHED
 	struct rq *rq;  /* cpu runqueue to which this vip_rq is attached */
 
@@ -70,12 +71,17 @@ struct vip_rq {
 	struct task_group *tg;  /* group that "owns" this runqueue */
 #endif /* CONFIG_VIP_GROUP_SCHED */
 
-	int vip_throttled;
-	u64 vip_time;
-	u64 vip_runtime;
+#ifdef CONFIG_VIP_BANDWIDTH
+	int			runtime_enabled;
+	s64			runtime_remaining;
 
-	u64 throttled_clock, throttled_clock_task;
-	u64 throttled_clock_task_time;
+	u64			throttled_clock;
+	u64			throttled_clock_task;
+	u64			throttled_clock_task_time;
+	int			throttled;
+	int			throttle_count;
+	struct list_head	throttled_list;
+#endif /* CONFIG_VIP_BANDWIDTH */
 };
 
 

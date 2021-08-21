@@ -946,20 +946,30 @@ vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
 		check_preempt_tick_vip(vip_rq, curr);
 }
 
-// /**************************************************
-//  * VIP bandwidth control machinery
-//  */
+/**************************************************
+ * VIP bandwidth control machinery
+ */
 
-// #ifdef CONFIG_VIP_BANDWIDTH
+#ifdef CONFIG_VIP_BANDWIDTH
 // /* check whether vip_rq, or any parent, is throttled */
 // static inline int vip_throttled_hierarchy(struct vip_rq *vip_rq)
 // {
 // 	return vip_bandwidth_used() && vip_rq->throttle_count;
 // }
 
-// #else	/* CONFIG_VIP_BANDWIDTH */
+static void init_vip_rq_runtime(struct vip_rq *vip_rq)
+{
+	vip_rq->runtime_enabled = 0;
+	INIT_LIST_HEAD(&vip_rq->throttled_list);
+}
 
-// #endif	/* CONFIG_VIP_BANDWIDTH */
+#else	/* CONFIG_VIP_BANDWIDTH */
+
+#ifdef CONFIG_VIP_GROUP_SCHED
+static void init_vip_rq_runtime(struct vip_rq *vip_rq) {}
+#endif
+
+#endif	/* CONFIG_VIP_BANDWIDTH */
 
 /*
  * The enqueue_task method is called before nr_running is
@@ -1569,6 +1579,33 @@ static void set_curr_task_vip(struct rq *rq)
 	}
 }
 
+/* Account for a task changing its policy or group.
+ *
+ * This routine is mostly called to set vip_rq->curr field when a task
+ * migrates between groups/classes.
+ */
+static void set_next_task_vip(struct rq *rq, struct task_struct *p, bool first)
+{
+	struct sched_entity *vip_se = &p->vip;
+
+#ifdef CONFIG_SMP
+	if (task_on_rq_queued(p)) {
+		/*
+		 * Move the next running task to the front of the list, so our
+		 * vip_tasks list becomes MRU one.
+		 */
+		list_move(&vip_se->group_node, &rq->vip_tasks);
+	}
+#endif
+
+	for_each_sched_entity(vip_se) {
+		struct vip_rq *vip_rq = vip_rq_of(vip_se);
+
+		set_next_entity(vip_rq, vip_se);
+		/* ensure bandwidth has been allocated on our new vip_rq */
+		// account_vip_rq_runtime(vip_rq, 0);		// TODO
+	}
+}
 
 // 初始化vip_rq的红黑树 -- start_kernel -> sched_init -> init_vip_rq
 void init_vip_rq(struct vip_rq *vip_rq)
@@ -1580,6 +1617,87 @@ void init_vip_rq(struct vip_rq *vip_rq)
 	vip_rq->min_vruntime_copy = vip_rq->min_vruntime;
 #endif
 }
+
+#ifdef CONFIG_VIP_GROUP_SCHED
+int alloc_vip_sched_group(struct task_group *tg, struct task_group *parent)
+{
+	struct sched_entity *vip_se;
+	struct vip_rq *vip_rq;
+	int i;
+
+	tg->vip_rq = kcalloc(nr_cpu_ids, sizeof(vip_rq), GFP_KERNEL);
+	if (!tg->vip_rq)
+		goto err;
+	tg->vip = kcalloc(nr_cpu_ids, sizeof(vip_se), GFP_KERNEL);
+	if (!tg->vip)
+		goto err;
+
+	tg->shares = NICE_0_LOAD;
+
+	// init_vip_bandwidth(tg_vip_bandwidth(tg));		// TODO
+
+	for_each_possible_cpu(i) {
+		vip_rq = kzalloc_node(sizeof(struct vip_rq),
+				      GFP_KERNEL, cpu_to_node(i));
+		if (!vip_rq)
+			goto err;
+
+		vip_se = kzalloc_node(sizeof(struct sched_entity),
+				  GFP_KERNEL, cpu_to_node(i));
+		if (!vip_se)
+			goto err_free_rq;
+
+		init_vip_rq(vip_rq);
+		init_tg_vip_entry(tg, vip_rq, vip_se, i, parent->vip[i]);
+		init_entity_runnable_average(vip_se);
+	}
+
+	return 1;
+
+err_free_rq:
+	kfree(vip_rq);
+err:
+	return 0;
+}
+
+// 组调度里初始化的调度实体vip_se的vip_rq成员指向系统中per-CPU变量rq的VIP调度队列，my_q 成员指向组调度(task_group)里自身的VIP调度队列
+void init_tg_vip_entry(struct task_group *tg, struct vip_rq *vip_rq,
+			struct sched_entity *vip_se, int cpu,
+			struct sched_entity *parent)
+{
+	struct rq *rq = cpu_rq(cpu);
+
+	vip_rq->tg = tg;
+	vip_rq->rq = rq;
+	init_vip_rq_runtime(vip_rq);
+
+	tg->vip_rq[cpu] = vip_rq;
+	tg->vip[cpu] = vip_se;
+
+	/* vip_se could be NULL for root_task_group */
+	if (!vip_se)
+		return;
+
+	if (!parent) {
+		vip_se->vip_rq = &rq->vip;
+		vip_se->depth = 0;
+	} else {
+		vip_se->vip_rq = parent->my_q;
+		vip_se->depth = parent->depth + 1;
+	}
+
+	vip_se->my_q = vip_rq;
+	/* guarantee group entities always have weight */
+	update_load_set(&vip_se->load, NICE_0_LOAD);
+	vip_se->parent = parent;
+}
+
+#else /* CONFIG_VIP_GROUP_SCHED */
+int alloc_vip_sched_group(struct task_group *tg, struct task_group *parent)
+{
+	return 1;
+}
+#endif /* CONFIG_VIP_GROUP_SCHED */
 
 /*
  * All the scheduling class methods:
@@ -1627,7 +1745,7 @@ const struct sched_class vip_sched_class = {
 	.update_curr		= update_curr_vip,		// 更新当前运行任务的 vruntime & viprq的min_vruntime
 
 #ifdef CONFIG_VIP_GROUP_SCHED
-	.task_change_group	= task_change_group_vip,
+	.task_change_group	= task_change_group_fair,
 #endif
 
 // #ifdef CONFIG_UCLAMP_TASK
