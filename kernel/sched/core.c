@@ -6664,8 +6664,9 @@ void __init sched_init(void)
 
 	wait_bit_init();
 
+// === 分配空间 ===
 #ifdef CONFIG_FAIR_GROUP_SCHED
-	ptr += 2 * nr_cpu_ids * sizeof(void **);
+	ptr += 2 * nr_cpu_ids * sizeof(void **);	// 为cfs_rq,sched_entity分配空间，每个cpu都存在cfs_rq和se
 #endif
 #ifdef CONFIG_VIP_GROUP_SCHED
 	ptr += 2 * nr_cpu_ids * sizeof(void **);
@@ -6713,22 +6714,26 @@ void __init sched_init(void)
 			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
 	}
 #endif /* CONFIG_CPUMASK_OFFSTACK */
-
+// === END OF ALLOC SPACE ====
+	
 	init_rt_bandwidth(&def_rt_bandwidth, global_rt_period(), global_rt_runtime());
 	init_dl_bandwidth(&def_dl_bandwidth, global_rt_period(), global_rt_runtime());
 #ifdef CONFIG_VIP_SCHED
-	init_vip_bandwidth(&def_vip_bandwidth, global_vip_period(), global_vip_runtime());		// TODO 
-#endif
-#ifdef CONFIG_SMP
-	init_defrootdomain();		// 初始化调度域根域
+	// init_vip_bandwidth(&def_vip_bandwidth, global_vip_period(), global_vip_runtime());		// TODO	Same as RT's.
 #endif
 
+#ifdef CONFIG_SMP
+	init_defrootdomain();		// 初始化调度域根域(root domain)，并初始化max_cpu_capacity结构体，update_cpu_capacity时候会被使用到
+#endif
+
+// 为root_task_group内的rt task设置带宽限制
 #ifdef CONFIG_RT_GROUP_SCHED
 	init_rt_bandwidth(&root_task_group.rt_bandwidth,
 			global_rt_period(), global_rt_runtime());
 #endif /* CONFIG_RT_GROUP_SCHED */
 
 #ifdef CONFIG_CGROUP_SCHED
+	// 将root_task_group加入到task group链表中，并设置它的孩子节点和兄弟节点链表
 	task_group_cache = KMEM_CACHE(task_group, 0);
 
 	list_add(&root_task_group.list, &task_groups);
@@ -6737,14 +6742,15 @@ void __init sched_init(void)
 	autogroup_init(&init_task);
 #endif /* CONFIG_CGROUP_SCHED */
 
+	// 每个cpu都有一个rq，开始为所有cpu上的rq进行初始化 =====================
 	for_each_possible_cpu(i) {
 		struct rq *rq;
 
-		rq = cpu_rq(i);
+		rq = cpu_rq(i);			// 使用per_cpu关联cpu与rq
 		raw_spin_lock_init(&rq->lock);
-		rq->nr_running = 0;
+		rq->nr_running = 0;		// 系统初始化时，rq队列里面没有可运行的task，置为0
 		rq->calc_load_active = 0;
-		rq->calc_load_update = jiffies + LOAD_FREQ;
+		rq->calc_load_update = jiffies + LOAD_FREQ;		// 计算负载update period
 		init_cfs_rq(&rq->cfs);
 		init_rt_rq(&rq->rt);
 		init_dl_rq(&rq->dl);
@@ -6790,19 +6796,25 @@ void __init sched_init(void)
 		 * We achieve this by letting root_task_group's tasks sit
 		 * directly in rq->cfs (i.e root_task_group->se[] = NULL).
 		 */
+		// 初始化cfs task的带宽限制，比rt要复杂
 		init_cfs_bandwidth(&root_task_group.cfs_bandwidth);
+		// 一个进程组里面的进程可能处在不同的CPU上运行，那么也就是不同的cfs_rq和调度实体了，所以每个task都会标记是属于哪个cfs_rq和调度实体的
+		// 对组调度相关数据结构初始化
 		init_tg_cfs_entry(&root_task_group, &rq->cfs, NULL, i, NULL);
 #endif /* CONFIG_FAIR_GROUP_SCHED */
-#ifdef CONFIG_VIP_GROUP_SCHED		// TODO
+
+#ifdef CONFIG_VIP_GROUP_SCHED
 		root_task_group.vip_shares = ROOT_TASK_GROUP_VIP_LOAD;
 		INIT_LIST_HEAD(&rq->leaf_vip_rq_list);
+		init_vip_bandwidth(&root_task_group.vip_bandwidth);		// 为root_task_group内的vip task设置带宽限制 Same as cfs's.
 		init_tg_vip_entry(&root_task_group, &rq->vip, NULL, i, NULL);
 #endif /* CONFIG_VIP_GROUP_SCHED */
 
-#ifdef CONFIG_VIP_SCHED
-		rq->vip.vip_runtime = def_vip_bandwidth.vip_runtime;
-#endif
+// #ifdef CONFIG_VIP_SCHED		// For like RT things
+// 		rq->vip.vip_runtime = def_vip_bandwidth.vip_runtime;
+// #endif
 
+		// 初始化rt可以运行的时间，默认值为950ms
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
 #ifdef CONFIG_RT_GROUP_SCHED
 		init_tg_rt_entry(&root_task_group, &rq->rt, NULL, i, NULL);
@@ -6845,6 +6857,7 @@ void __init sched_init(void)
 		hrtick_rq_init(rq);
 		atomic_set(&rq->nr_iowait, 0);
 	}
+	// 至此，整个rq初始化完毕 ==================================
 
 	set_load_weight(&init_task, false);
 
@@ -6860,6 +6873,7 @@ void __init sched_init(void)
 	 * but because we are the idle thread, we just pick up running again
 	 * when this runqueue becomes "idle".
 	 */
+	// 将当前进程初始化为idle进程，设置它的调度类为idle_sched_class
 	init_idle(current, smp_processor_id());
 
 	calc_load_update = jiffies + LOAD_FREQ;
@@ -6878,7 +6892,7 @@ void __init sched_init(void)
 
 	init_uclamp();
 
-	scheduler_running = 1;
+	scheduler_running = 1;		// 调度器开始工作
 }
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP

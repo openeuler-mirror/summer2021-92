@@ -962,6 +962,15 @@ vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
  */
 
 #ifdef CONFIG_VIP_BANDWIDTH
+/*
+ * default period for vip group bandwidth.
+ * default: 0.1s, units: nanoseconds
+ */
+static inline u64 default_vip_period(void)
+{
+	return 100000000ULL;
+}
+
 // /* check whether vip_rq, or any parent, is throttled */
 // static inline int vip_throttled_hierarchy(struct vip_rq *vip_rq)
 // {
@@ -974,11 +983,29 @@ static void init_vip_rq_runtime(struct vip_rq *vip_rq)
 	INIT_LIST_HEAD(&vip_rq->throttled_list);
 }
 
+void init_vip_bandwidth(struct vip_bandwidth *vip_b)
+{
+	raw_spin_lock_init(&vip_b->lock);
+	vip_b->runtime = 0;
+	vip_b->quota = RUNTIME_INF;
+	vip_b->period = ns_to_ktime(default_vip_period());
+
+	INIT_LIST_HEAD(&vip_b->throttled_vip_rq);
+	hrtimer_init(&vip_b->period_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_PINNED);
+	vip_b->period_timer.function = sched_vip_period_timer;
+	hrtimer_init(&vip_b->slack_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	vip_b->slack_timer.function = sched_vip_slack_timer;
+	vip_b->distribute_running = 0;
+	vip_b->slack_started = false;
+}
+
 #else	/* CONFIG_VIP_BANDWIDTH */
 
 #ifdef CONFIG_VIP_GROUP_SCHED
 static void init_vip_rq_runtime(struct vip_rq *vip_rq) {}
 #endif
+
+void init_vip_bandwidth(struct vip_bandwidth *vip_b) {}
 
 #endif	/* CONFIG_VIP_BANDWIDTH */
 

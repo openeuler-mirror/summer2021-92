@@ -10663,7 +10663,8 @@ void unregister_fair_sched_group(struct task_group *tg)
 	}
 }
 
-// 组调度里初始化的调度实体 se的cfs_rq成员指向系统中per-CPU变量rq的CFS调度队列，my_q 成员指向组调度(task_group)里自身的CFS调度队列
+// 对组调度相关数据结构初始化
+// 组调度里初始化的调度实体se的cfs_rq指向系统中per-CPU变量rq的CFS调度队列而不是另起炉灶，task_group中se的my_q成员指向task_group里自身的CFS调度队列
 void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 			struct sched_entity *se, int cpu,
 			struct sched_entity *parent)

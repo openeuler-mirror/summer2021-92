@@ -14,7 +14,7 @@
 
 struct vip_bandwidth {
 #ifdef CONFIG_VIP_BANDWIDTH
-	raw_spinlock_t		vip_runtime_lock;
+	raw_spinlock_t		lock;
 	ktime_t				period;				// 设定的定时器周期时间，周期到了进行下一轮带宽控制
 	u64					quota;				// 一个period周期内，一个组 可以使用的CPU限额(所有的用户组进程运行的时间累加在一起，保证总的运行时间小于quota)
 											// 每个用户组会管理CPU个数的就绪队列group vip_rq。每个group vip_rq中也有限额时间，该限额时间是从全局用户组quota中申请

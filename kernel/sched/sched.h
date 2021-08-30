@@ -925,6 +925,12 @@ struct rq {
 	struct list_head	*tmp_alone_branch;
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
+#ifdef CONFIG_VIP_GROUP_SCHED
+	/* list of leaf vip_rq on this CPU: */
+	struct list_head	leaf_vip_rq_list;
+	struct list_head	*tmp_alone_branch;
+#endif /* CONFIG_VIP_GROUP_SCHED */
+
 	/*
 	 * This is part of a global counter where only the total sum
 	 * over all CPUs matters. A task can increase this counter on
