@@ -7218,7 +7218,7 @@ void sched_move_task(struct task_struct *tsk)
 	if (running)
 		put_prev_task(rq, tsk);		// 如果该进程正在运行中， 刚才已经调用dequeue_task()函数把进程退出就绪队列，现在只能继续添加回到就绪队列中
 
-	sched_change_group(tsk, TASK_MOVE_GROUP);
+	sched_change_group(tsk, TASK_MOVE_GROUP);			// ??????????????????
 
 	if (queued)
 		enqueue_task(rq, tsk, queue_flags);

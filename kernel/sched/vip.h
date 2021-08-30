@@ -12,7 +12,29 @@
 #include <linux/sched.h>
 #include <uapi/linux/sched.h>
 
-// TODO struct vip_bandwidth {
+struct vip_bandwidth {
+#ifdef CONFIG_VIP_BANDWIDTH
+	raw_spinlock_t		vip_runtime_lock;
+	ktime_t				period;				// 设定的定时器周期时间，周期到了进行下一轮带宽控制
+	u64					quota;				// 一个period周期内，一个组 可以使用的CPU限额(所有的用户组进程运行的时间累加在一起，保证总的运行时间小于quota)
+											// 每个用户组会管理CPU个数的就绪队列group vip_rq。每个group vip_rq中也有限额时间，该限额时间是从全局用户组quota中申请
+	u64					runtime;			// 记录剩余限额时间，在每次定时器回调函数中更新值为quota
+	s64					hierarchical_quota;	// 层级管理任务组的限额比率
+
+	u8					idle;				// 空闲状态，不需要运行时分配
+	u8					period_active;		// 周期性计时已经启动
+	u8					distribute_running;
+	u8					slack_started;
+	struct hrtimer		period_timer;		// 高精度定时器
+	struct hrtimer		slack_timer;		// 延迟定时器，在任务出列时，将剩余的运行时间返回到全局池里
+	struct list_head	throttled_vip_rq;	// 所有被throttle的vip_rq挂入此链表，在定时器的回调函数中遍历链表执行unthrottle vip_rq操作
+
+	/* Statistics: */
+	int					nr_periods;
+	int					nr_throttled;
+	u64					throttled_time;
+#endif
+}
 
 struct vip_rq {
 	struct load_weight load;

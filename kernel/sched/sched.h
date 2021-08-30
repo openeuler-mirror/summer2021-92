@@ -341,24 +341,24 @@ extern struct list_head task_groups;
 struct cfs_bandwidth {
 #ifdef CONFIG_CFS_BANDWIDTH
 	raw_spinlock_t		lock;
-	ktime_t			period;		// 设定的定时器周期时间，周期到了进行下一轮带宽控制
-	u64			quota;		// 一个period周期内，一个组 可以使用的CPU限额(所有的用户组进程运行的时间累加在一起，保证总的运行时间小于quota)
-							// 每个用户组会管理CPU个数的就绪队列group cfs_rq。每个group cfs_rq中也有限额时间，该限额时间是从全局用户组quota中申请
-	u64			runtime;	// 记录剩余限额时间，在每次定时器回调函数中更新值为quota
-	s64			hierarchical_quota;
+	ktime_t				period;				// 设定的定时器周期时间，周期到了进行下一轮带宽控制
+	u64					quota;				// 一个period周期内，一个组 可以使用的CPU限额(所有的用户组进程运行的时间累加在一起，保证总的运行时间小于quota)
+											// 每个用户组会管理CPU个数的就绪队列group cfs_rq。每个group cfs_rq中也有限额时间，该限额时间是从全局用户组quota中申请
+	u64					runtime;			// 记录剩余限额时间，在每次定时器回调函数中更新值为quota
+	s64					hierarchical_quota;
 
-	u8			idle;
-	u8			period_active;
-	u8			distribute_running;
-	u8			slack_started;
-	struct hrtimer		period_timer;	// 高精度定时器
+	u8					idle;
+	u8					period_active;
+	u8					distribute_running;
+	u8					slack_started;
+	struct hrtimer		period_timer;		// 高精度定时器
 	struct hrtimer		slack_timer;
 	struct list_head	throttled_cfs_rq;	// 所有被throttle的cfs_rq挂入此链表，在定时器的回调函数中遍历链表执行unthrottle cfs_rq操作
 
 	/* Statistics: */
-	int			nr_periods;
-	int			nr_throttled;
-	u64			throttled_time;
+	int					nr_periods;
+	int					nr_throttled;
+	u64					throttled_time;
 #endif
 };
 
@@ -368,10 +368,16 @@ struct task_group {
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* schedulable entities of this group on each CPU */
+	// 指针数组，每个元素都是指向调度实体的指针，元素的个数等于系统可能拥有的CPU数量「possible CPUs」。
+	// 一个任务组对应的进程集合可被调度到多个CPU上运行，这样每个CPU对应的进程子集会被抽象成一个调度实体，并且指向它的指针将被存入这个数组
 	struct sched_entity	**se;	// 普通进程调度单元，之所以用调度单元，因为被调度的可能是一个进程，也可能是一组进程
+	
 	/* runqueue "owned" by this group on each CPU */
+	// 指针数组，每个元素都是指向CFS运行队列的指针，元素的个数等于系统可能拥有的CPU数量「possible CPUs」。
+	// 一个任务组对应的进程集合可被调度到多个CPU上运行，这样每个CPU对应的进程会被单独加入一个CFS运行队列，而且指向它的指针将被存入这个数组
 	struct cfs_rq		**cfs_rq;	// 公平调度队列们
-	unsigned long		shares;		// 调度实体有权重的概念，以权重的比例分配CPU时间。用户组同样有权重的概念，share就是task_group的权重。
+
+	unsigned long		shares;		// 调度实体有权重的概念，以权重的比例分配CPU时间。用户组同样有权重的概念，share就是task_group的权重，与时间份额挂钩
 
 #ifdef	CONFIG_SMP
 	/*
@@ -388,7 +394,7 @@ struct task_group {
 	struct vip_rq **vip_rq;
 	unsigned long vip_shares;
 
-	// atomic64_t vip_load_avg;
+	// atomic64_t vip_load_avg;		// TODO
 	
 	struct vip_bandwidth	vip_bandwidth;	// VIP进程占用CPU时间的带宽（或者说比例）
 #endif
@@ -401,7 +407,7 @@ struct task_group {
 #endif
 
 	struct rcu_head		rcu;
-	struct list_head	list;
+	struct list_head	list;			// 用于连接描述任务组的实例「struct task_group对象」
 
 // task_group呈树状结构组织，有父节点，兄弟链表，孩子链表，内核里面的根节点是root_task_group
 	struct task_group	*parent;

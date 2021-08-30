@@ -909,6 +909,16 @@ config CFS_BANDWIDTH
 	  restriction.
 	  See Documentation/scheduler/sched-bwc.rst for more information.
 
+config VIP_BANDWIDTH
+	bool "CPU bandwidth provisioning for VIP_GROUP_SCHED"
+	depends on VIP_GROUP_SCHED
+	default n
+	help
+	  This option allows users to define CPU bandwidth rates (limits) for
+	  tasks running within the VIP group scheduler.  Groups with no limit
+	  set are considered to be unconstrained and will run with no
+	  restriction.
+
 config RT_GROUP_SCHED
 	bool "Group scheduling for SCHED_RR/FIFO"
 	depends on CGROUP_SCHED

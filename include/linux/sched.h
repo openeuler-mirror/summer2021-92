@@ -451,15 +451,15 @@ struct sched_entity {
 	struct load_weight		load;
 	unsigned long			runnable_weight;
 	struct rb_node			run_node;
-	struct list_head		group_node;
-	unsigned int			on_rq;
+	struct list_head		group_node;		// 用于将普通任务「normal task」对应的调度实体插入运行队列「struct rq」管理的cfs_tasks链表
+	unsigned int			on_rq;			// 指示调度实体是否插入红黑树。如果当前调度实体被插入红黑树，那么其将被设置为1。如果当前调度实体被移出「dequeue」红黑树，那么其会被设置成0
 
-	u64				exec_start;
-	u64				sum_exec_runtime;
+	u64				exec_start;				// 记录当前调度实体在这次被调度执行的起始时刻
+	u64				sum_exec_runtime;		// 记录调度实体总共占用的CPU运行时间
 	u64				vruntime;
-	u64				prev_sum_exec_runtime;
+	u64				prev_sum_exec_runtime;	// 记录截至上一次被调度执行结束时当前调度实体消耗掉的CPU执行时间，通过使用sum_exec_runtime和prev_sum_exec_runtime能够计算出在这次调度执行期间当前调度实体实际占用的CPU执行时间
 
-	u64				nr_migrations;
+	u64				nr_migrations;			// 记录当前调度实体已切换执行CPU的次数
 
 	struct sched_statistics		statistics;
 #ifdef	CONFIG_VIP_SCHED

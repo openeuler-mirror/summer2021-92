@@ -411,6 +411,17 @@ update_stats_dequeue_vip(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 		update_stats_wait_end_vip(vip_rq, vip_se);
 }
 
+/*
+ * We are picking a new current task - update its stats:
+ */
+static inline void
+update_stats_curr_start_vip(struct vip_rq *vip_rq, struct sched_entity *se)
+{
+	/*
+	 * We are starting a new run period:
+	 */
+	se->exec_start = rq_clock_task(rq_of_vip_rq(vip_rq));
+}
 
 static void
 account_vip_entity_enqueue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
@@ -1348,6 +1359,7 @@ static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct 
 		return NULL;
 
 // TODO: Group scheduling & SMP 
+// A basic version of handling group scheduling.
 
 	if (prev)
 		put_prev_task(rq, prev);
@@ -1453,7 +1465,8 @@ static void task_tick_vip(struct rq *rq, struct task_struct *curr, int queued)
 		vip_entity_tick(vip_rq, vip_se, queued);
 	}
 
-	// TODO NUMA tick judging
+	if (static_branch_unlikely(&sched_numa_balancing))
+		task_tick_numa(rq, curr);
 }
 
 // 完成当前创建的新进程的虚拟时间初始化
