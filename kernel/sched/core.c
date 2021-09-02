@@ -2711,10 +2711,15 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->vip.prev_sum_exec_runtime	= 0;
 	p->vip.nr_migrations		= 0;
 	p->vip.vruntime			= 0;
+	INIT_LIST_HEAD(&p->vip_se.group_node);
 #endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	p->se.cfs_rq			= NULL;
+#endif
+
+#ifdef CONFIG_VIP_GROUP_SCHED
+	p->vip_se.vip_rq		= NULL;
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
@@ -7110,6 +7115,7 @@ static void sched_free_group(struct task_group *tg)
 {
 	free_fair_sched_group(tg);
 	free_rt_sched_group(tg);
+	free_vip_sched_group(tg);
 	autogroup_free(tg);
 	kmem_cache_free(task_group_cache, tg);
 }
@@ -7818,6 +7824,289 @@ static int cpu_cfs_stat_show(struct seq_file *sf, void *v)
 #endif /* CONFIG_CFS_BANDWIDTH */
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
+#ifdef CONFIG_VIP_GROUP_SCHED
+static int cpu_vip_shares_write_u64(struct cgroup_subsys_state *css,
+				struct cftype *cftype, u64 shareval)
+{
+	if (shareval > scale_load_down(ULONG_MAX))
+		shareval = MAX_SHARES;
+	return sched_group_set_vip_shares(css_tg(css), scale_load(shareval));
+}
+
+static u64 cpu_vip_shares_read_u64(struct cgroup_subsys_state *css,
+			       struct cftype *cft)
+{
+	struct task_group *tg = css_tg(css);
+
+	return (u64) scale_load_down(tg->vip_shares);
+}
+
+#ifdef CONFIG_VIP_BANDWIDTH
+static DEFINE_MUTEX(vip_constraints_mutex);
+
+const u64 max_vip_quota_period = 1 * NSEC_PER_SEC; /* 1s */
+static const u64 min_vip_quota_period = 1 * NSEC_PER_MSEC; /* 1ms */
+
+static int __vip_schedulable(struct task_group *tg, u64 period, u64 runtime);
+// TODO 大todo
+static int tg_set_vip_bandwidth(struct task_group *tg, u64 period, u64 quota)
+{
+// 	int i, ret = 0, runtime_enabled, runtime_was_enabled;
+// 	struct vip_bandwidth *vip_b = &tg->vip_bandwidth;
+
+// 	if (tg == &root_task_group)
+// 		return -EINVAL;
+
+// 	/*
+// 	 * Ensure we have at some amount of bandwidth every period.  This is
+// 	 * to prevent reaching a state of large arrears when throttled via
+// 	 * entity_tick() resulting in prolonged exit starvation.
+// 	 */
+// 	if (quota < min_vip_quota_period || period < min_vip_quota_period)
+// 		return -EINVAL;
+
+// 	/*
+// 	 * Likewise, bound things on the otherside by preventing insane quota
+// 	 * periods.  This also allows us to normalize in computing quota
+// 	 * feasibility.
+// 	 */
+// 	if (period > max_vip_quota_period)
+// 		return -EINVAL;
+
+// 	/*
+// 	 * Prevent race between setting of vip_rq->runtime_enabled and
+// 	 * unthrottle_offline_vip_rqs().
+// 	 */
+// 	get_online_cpus();
+// 	mutex_lock(&vip_constraints_mutex);
+// 	ret = __vip_schedulable(tg, period, quota);
+// 	if (ret)
+// 		goto out_unlock;
+
+// 	runtime_enabled = quota != RUNTIME_INF;
+// 	runtime_was_enabled = vip_b->quota != RUNTIME_INF;
+// 	/*
+// 	 * If we need to toggle vip_bandwidth_used, off->on must occur
+// 	 * before making related changes, and on->off must occur afterwards
+// 	 */
+// 	if (runtime_enabled && !runtime_was_enabled)
+// 		// vip_bandwidth_usage_inc();
+// 	raw_spin_lock_irq(&vip_b->lock);
+// 	vip_b->period = ns_to_ktime(period);
+// 	vip_b->quota = quota;
+
+// 	// __refill_vip_bandwidth_runtime(vip_b);
+
+// 	/* Restart the period timer (if active) to handle new period expiry: */
+// 	if (runtime_enabled)
+// 		// start_vip_bandwidth(vip_b);
+
+// 	raw_spin_unlock_irq(&vip_b->lock);
+
+// 	for_each_online_cpu(i) {
+// 		struct vip_rq *vip_rq = tg->vip_rq[i];
+// 		struct rq *rq = vip_rq->rq;
+// 		struct rq_flags rf;
+
+// 		rq_lock_irq(rq, &rf);
+// 		vip_rq->runtime_enabled = runtime_enabled;
+// 		vip_rq->runtime_remaining = 0;
+
+// 		if (vip_rq->throttled)
+// 			// unthrottle_vip_rq(vip_rq);
+// 		rq_unlock_irq(rq, &rf);
+// 	}
+// 	if (runtime_was_enabled && !runtime_enabled)
+// 		// vip_bandwidth_usage_dec();
+// out_unlock:
+// 	mutex_unlock(&vip_constraints_mutex);
+// 	put_online_cpus();
+
+// 	return ret;
+}
+
+static int tg_set_vip_quota(struct task_group *tg, long vip_quota_us)
+{
+	u64 quota, period;
+
+	period = ktime_to_ns(tg->vip_bandwidth.period);
+	if (vip_quota_us < 0)
+		quota = RUNTIME_INF;
+	else if ((u64)vip_quota_us <= U64_MAX / NSEC_PER_USEC)
+		quota = (u64)vip_quota_us * NSEC_PER_USEC;
+	else
+		return -EINVAL;
+
+	return tg_set_vip_bandwidth(tg, period, quota);
+}
+
+static long tg_get_vip_quota(struct task_group *tg)
+{
+	u64 quota_us;
+
+	if (tg->vip_bandwidth.quota == RUNTIME_INF)
+		return -1;
+
+	quota_us = tg->vip_bandwidth.quota;
+	do_div(quota_us, NSEC_PER_USEC);
+
+	return quota_us;
+}
+
+static int tg_set_vip_period(struct task_group *tg, long vip_period_us)
+{
+	u64 quota, period;
+
+	if ((u64)vip_period_us > U64_MAX / NSEC_PER_USEC)
+		return -EINVAL;
+
+	period = (u64)vip_period_us * NSEC_PER_USEC;
+	quota = tg->vip_bandwidth.quota;
+
+	return tg_set_vip_bandwidth(tg, period, quota);
+}
+
+static long tg_get_vip_period(struct task_group *tg)
+{
+	u64 vip_period_us;
+
+	vip_period_us = ktime_to_ns(tg->vip_bandwidth.period);
+	do_div(vip_period_us, NSEC_PER_USEC);
+
+	return vip_period_us;
+}
+
+static s64 cpu_vip_quota_read_s64(struct cgroup_subsys_state *css,
+				  struct cftype *cft)
+{
+	return tg_get_vip_quota(css_tg(css));
+}
+
+static int cpu_vip_quota_write_s64(struct cgroup_subsys_state *css,
+				   struct cftype *cftype, s64 vip_quota_us)
+{
+	return tg_set_vip_quota(css_tg(css), vip_quota_us);
+}
+
+static u64 cpu_vip_period_read_u64(struct cgroup_subsys_state *css,
+				   struct cftype *cft)
+{
+	return tg_get_vip_period(css_tg(css));
+}
+
+static int cpu_vip_period_write_u64(struct cgroup_subsys_state *css,
+				    struct cftype *cftype, u64 vip_period_us)
+{
+	return tg_set_vip_period(css_tg(css), vip_period_us);
+}
+
+struct vip_schedulable_data {
+	struct task_group *tg;
+	u64 period, quota;
+};
+
+/*
+ * normalize group quota/period to be quota/max_period
+ * note: units are usecs
+ */
+static u64 normalize_vip_quota(struct task_group *tg,
+			       struct vip_schedulable_data *d)
+{
+	u64 quota, period;
+
+	if (tg == d->tg) {
+		period = d->period;
+		quota = d->quota;
+	} else {
+		period = tg_get_vip_period(tg);
+		quota = tg_get_vip_quota(tg);
+	}
+
+	/* note: these should typically be equivalent */
+	if (quota == RUNTIME_INF || quota == -1)
+		return RUNTIME_INF;
+
+	return to_ratio(period, quota);
+}
+
+static int tg_vip_schedulable_down(struct task_group *tg, void *data)
+{
+	struct vip_schedulable_data *d = data;
+	struct vip_bandwidth *vip_b = &tg->vip_bandwidth;
+	s64 quota = 0, parent_quota = -1;
+
+	if (!tg->parent) {
+		quota = RUNTIME_INF;
+	} else {
+		struct vip_bandwidth *parent_b = &tg->parent->vip_bandwidth;
+
+		quota = normalize_vip_quota(tg, d);
+		parent_quota = parent_b->hierarchical_quota;
+
+		/*
+		 * Ensure max(child_quota) <= parent_quota.  On cgroup2,
+		 * always take the min.  On cgroup1, only inherit when no
+		 * limit is set:
+		 */
+		if (cgroup_subsys_on_dfl(cpu_cgrp_subsys)) {
+			quota = min(quota, parent_quota);
+		} else {
+			if (quota == RUNTIME_INF)
+				quota = parent_quota;
+			else if (parent_quota != RUNTIME_INF && quota > parent_quota)
+				return -EINVAL;
+		}
+	}
+	vip_b->hierarchical_quota = quota;
+
+	return 0;
+}
+
+static int __vip_schedulable(struct task_group *tg, u64 period, u64 quota)
+{
+	int ret;
+	struct vip_schedulable_data data = {
+		.tg = tg,
+		.period = period,
+		.quota = quota,
+	};
+
+	if (quota != RUNTIME_INF) {
+		do_div(data.period, NSEC_PER_USEC);
+		do_div(data.quota, NSEC_PER_USEC);
+	}
+
+	rcu_read_lock();
+	ret = walk_tg_tree(tg_vip_schedulable_down, tg_nop, &data);
+	rcu_read_unlock();
+
+	return ret;
+}
+
+static int cpu_vip_stat_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = css_tg(seq_css(sf));
+	struct vip_bandwidth *vip_b = &tg->vip_bandwidth;
+
+	seq_printf(sf, "nr_periods %d\n", vip_b->nr_periods);
+	seq_printf(sf, "nr_throttled %d\n", vip_b->nr_throttled);
+	seq_printf(sf, "throttled_time %llu\n", vip_b->throttled_time);
+
+	if (schedstat_enabled() && tg != &root_task_group) {
+		u64 ws = 0;
+		int i;
+
+		for_each_possible_cpu(i)
+			ws += schedstat_val(tg->se[i]->statistics.wait_sum);
+
+		seq_printf(sf, "wait_sum %llu\n", ws);
+	}
+
+	return 0;
+}
+#endif /* CONFIG_VIP_BANDWIDTH */
+#endif /* CONFIG_VIP_GROUP_SCHED */
+
 #ifdef CONFIG_RT_GROUP_SCHED
 static int cpu_rt_runtime_write(struct cgroup_subsys_state *css,
 				struct cftype *cft, s64 val)
@@ -7866,6 +8155,30 @@ static struct cftype cpu_legacy_files[] = {
 	{
 		.name = "stat",
 		.seq_show = cpu_cfs_stat_show,
+	},
+#endif
+// 在 /sys/fs/cgroup/cpu/ 下多出的 cpu.XXX 配置文件
+#ifdef CONFIG_VIP_GROUP_SCHED
+	{
+		.name = "vip_shares",
+		.read_u64 = cpu_vip_shares_read_u64,
+		.write_u64 = cpu_vip_shares_write_u64,
+	},
+#endif
+#ifdef CONFIG_VIP_BANDWIDTH
+	{
+		.name = "vip_quota_us",
+		.read_s64 = cpu_vip_quota_read_s64,
+		.write_s64 = cpu_vip_quota_write_s64,
+	},
+	{
+		.name = "vip_period_us",
+		.read_u64 = cpu_vip_period_read_u64,
+		.write_u64 = cpu_vip_period_write_u64,
+	},
+	{
+		.name = "vip_stat",
+		.seq_show = cpu_vip_stat_show,
 	},
 #endif
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -8060,6 +8373,28 @@ static struct cftype cpu_files[] = {
 		.seq_show = cpu_max_show,
 		.write = cpu_max_write,
 	},
+#endif
+#ifdef CONFIG_VIP_GROUP_SCHED
+	// {
+	// 	.name = "weight",
+	// 	.flags = CFTYPE_NOT_ON_ROOT,
+	// 	.read_u64 = cpu_weight_read_u64,
+	// 	.write_u64 = cpu_weight_write_u64,
+	// },
+	// {
+	// 	.name = "weight.nice",
+	// 	.flags = CFTYPE_NOT_ON_ROOT,
+	// 	.read_s64 = cpu_weight_nice_read_s64,
+	// 	.write_s64 = cpu_weight_nice_write_s64,
+	// },
+#endif
+#ifdef CONFIG_VIP_BANDWIDTH
+	// {
+	// 	.name = "max",
+	// 	.flags = CFTYPE_NOT_ON_ROOT,
+	// 	.seq_show = cpu_max_show,
+	// 	.write = cpu_max_write,
+	// },
 #endif
 #ifdef CONFIG_UCLAMP_TASK_GROUP
 	{

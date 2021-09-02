@@ -33,7 +33,7 @@ static inline int vip_task(struct task_struct *p)
  * VIP operations on generic schedulable entities:
  */
 
-#ifdef CONFIG_VIP_GROUP_SCHED
+#ifdef CONFIG_VIP_SCHED
 /* An entity is a task if it doesn't "own" a runqueue */
 #define vip_entity_is_task(vip)	(!vip->my_q)
 
@@ -69,7 +69,7 @@ static inline struct rq *rq_of_vip_rq(struct vip_rq *vip_rq)
 	return vip_rq->rq;
 }
 
-#else	/* !CONFIG_VIP_GROUP_SCHED */
+#else	/* !CONFIG_VIP_SCHED */
 
 #define vip_entity_is_task(vip)	1
 
@@ -105,7 +105,7 @@ static inline struct rq *rq_of_vip_rq(struct vip_rq* vip_rq)
 	return container_of(vip_rq, struct rq, vip);
 }
 
-#endif	/* CONFIG_VIP_GROUP_SCHED */	/******************************************************/
+#endif	/* CONFIG_VIP_SCHED */	/******************************************************/
 
 static inline struct task_struct *vip_task_of(struct sched_entity *vip_se)
 {
@@ -439,20 +439,21 @@ account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 	vip_rq->nr_running--;
 }
 
-// static void reweight_vip_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
-// 			    unsigned long weight, unsigned long runnable)
-// {
+// TODO -- group scheduling related
+static void reweight_vip_entity(struct vip_rq *vip_rq, struct sched_entity *se,
+			    unsigned long weight, unsigned long runnable)
+{
 // 	if (se->on_rq) {
 // 		/* commit outstanding execution time */
-// 		if (cfs_rq->curr == se)
-// 			update_curr(cfs_rq);
-// 		account_entity_dequeue(cfs_rq, se);
-// 		dequeue_runnable_load_avg(cfs_rq, se);
+// 		if (vip_rq->curr == se)
+// 			update_curr_vip(vip_rq);
+// 		account_entity_dequeue(vip_rq, se);
+// 		dequeue_runnable_load_avg(vip_rq, se);
 // 	}
-// 	dequeue_load_avg(cfs_rq, se);
+// 	dequeue_load_avg(vip_rq, se);
 
 // 	se->runnable_weight = runnable;
-// 	update_load_set(&se->load, weight);
+	update_load_set(&se->load, weight);
 
 // #ifdef CONFIG_SMP
 // 	do {
@@ -464,14 +465,14 @@ account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 // 	} while (0);
 // #endif
 
-// 	enqueue_load_avg(cfs_rq, se);
+// 	enqueue_load_avg(vip_rq, se);
 // 	if (se->on_rq) {
-// 		account_entity_enqueue(cfs_rq, se);
-// 		enqueue_runnable_load_avg(cfs_rq, se);
+// 		account_entity_enqueue(vip_rq, se);
+// 		enqueue_runnable_load_avg(vip_rq, se);
 // 	}
-// }
+}
 
-// #ifdef CONFIG_VIP_GROUP_SCHED
+#ifdef CONFIG_VIP_GROUP_SCHED
 // #ifdef CONFIG_SMP
 // /*
 //  * All this does is approximate the hierarchical proportion which includes that
@@ -625,23 +626,23 @@ account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 // }
 // #endif /* CONFIG_SMP */
 
-// static inline int throttled_hierarchy(struct vip_rq *vip_rq);
+static inline int throttled_hierarchy(struct vip_rq *vip_rq);
 
-// /*
-//  * Recomputes the group entity based on the current state of its group
-//  * runqueue.
-//  */
-// // 更新VIP group sched_entity的权重信息
-// static void update_vip_group(struct sched_entity *vip_se)
-// {
-// 	struct vip_rq *gvip_rq = group_vip_rq(vip_se);
-// 	long shares, runnable;
+/*
+ * Recomputes the group entity based on the current state of its group
+ * runqueue.
+ */
+// 更新VIP group sched_entity的权重信息
+static void update_vip_group(struct sched_entity *vip_se)
+{
+	struct vip_rq *gvip_rq = group_vip_rq(vip_se);
+	long shares, runnable;
 
-// 	if (!gvip_rq)
-// 		return;
+	if (!gvip_rq)
+		return;
 
-// 	if (vip_throttled_hierarchy(gvip_rq))	// ?
-// 		return;
+	if (vip_throttled_hierarchy(gvip_rq))	// ?
+		return;
 
 // #ifndef CONFIG_SMP
 // 	runnable = shares = READ_ONCE(gvip_rq->tg->vip_shares);
@@ -649,18 +650,18 @@ account_vip_entity_dequeue(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 // 	if (likely(vip_se->load.weight == shares))
 // 		return;
 // #else
-// 	shares   = calc_vip_group_shares(gvip_rq);
-// 	runnable = calc_vip_group_runnable(gvip_rq, shares);
+	shares   = calc_vip_group_shares(gvip_rq);
+	runnable = calc_vip_group_runnable(gvip_rq, shares);
 // #endif
 
-// 	reweight_vip_entity(vip_rq_of(se), se, shares, runnable);
-// }
+	reweight_vip_entity(vip_rq_of(vip_se), vip_se, shares, runnable);
+}
 
-// #else /* CONFIG_VIP_GROUP_SCHED */
-// static inline void update_vip_group(struct sched_entity *vip_se)
-// {
-// }
-// #endif /* CONFIG_VIP_GROUP_SCHED */
+#else /* CONFIG_VIP_GROUP_SCHED */
+static inline void update_vip_group(struct sched_entity *vip_se)
+{
+}
+#endif /* CONFIG_VIP_GROUP_SCHED */
 
 static void check_vip_spread(struct vip_rq *vip_rq, struct sched_entity *vip_se)
 {
@@ -962,6 +963,11 @@ vip_entity_tick(struct vip_rq *vip_rq, struct sched_entity *curr, int queued)
  */
 
 #ifdef CONFIG_VIP_BANDWIDTH
+
+static inline bool vip_bandwidth_used(void)
+{
+	return true;
+}
 /*
  * default period for vip group bandwidth.
  * default: 0.1s, units: nanoseconds
@@ -977,10 +983,25 @@ static inline u64 default_vip_period(void)
 // 	return vip_bandwidth_used() && vip_rq->throttle_count;
 // }
 
+static inline struct vip_bandwidth *tg_vip_bandwidth(struct task_group *tg)
+{
+	return &tg->vip_bandwidth;
+}
+
 static void init_vip_rq_runtime(struct vip_rq *vip_rq)
 {
 	vip_rq->runtime_enabled = 0;
 	INIT_LIST_HEAD(&vip_rq->throttled_list);
+}
+
+static void destroy_vip_bandwidth(struct vip_bandwidth *vip_b)
+{
+	/* init_vip_bandwidth() was not called */
+	if (!vip_b->throttled_vip_rq.next)
+		return;
+
+	hrtimer_cancel(&vip_b->period_timer);
+	hrtimer_cancel(&vip_b->slack_timer);
 }
 
 void init_vip_bandwidth(struct vip_bandwidth *vip_b)
@@ -1001,11 +1022,23 @@ void init_vip_bandwidth(struct vip_bandwidth *vip_b)
 
 #else	/* CONFIG_VIP_BANDWIDTH */
 
+static inline bool vip_bandwidth_used(void)
+{
+	return false;
+}
+
 #ifdef CONFIG_VIP_GROUP_SCHED
 static void init_vip_rq_runtime(struct vip_rq *vip_rq) {}
 #endif
 
 void init_vip_bandwidth(struct vip_bandwidth *vip_b) {}
+
+static inline struct vip_bandwidth *tg_vip_bandwidth(struct task_group *tg)
+{
+	return NULL;
+}
+
+static inline void destroy_vip_bandwidth(struct vip_bandwidth *vip_b) {}
 
 #endif	/* CONFIG_VIP_BANDWIDTH */
 
@@ -1392,7 +1425,7 @@ static struct task_struct *pick_next_task_vip(struct rq *rq, struct task_struct 
 		put_prev_task(rq, prev);
 
 	do {
-		vip_se = pick_next_vip_entity(vip_rq, NULL);
+		vip_se = pick_next_vip_entity(vip_rq);
 		set_next_vip_entity(vip_rq, vip_se);
 		vip_rq = group_vip_rq(vip_se);
 	} while (vip_rq);
@@ -1659,6 +1692,57 @@ void init_vip_rq(struct vip_rq *vip_rq)
 }
 
 #ifdef CONFIG_VIP_GROUP_SCHED
+static void task_set_group_vip(struct task_struct *p)
+{
+	struct sched_entity *vip_se = &p->vip_se;
+
+	set_task_rq(p, task_cpu(p));
+	vip_se->depth = vip_se->parent ? vip_se->parent->depth + 1 : 0;
+}
+
+static void task_move_group_vip(struct task_struct *p)
+{
+	// detach_task_vip_rq(p);		// TODO
+	set_task_rq(p, task_cpu(p));
+
+#ifdef CONFIG_SMP
+	/* Tell vip_se's vip_rq has been changed -- migrated */
+	p->vip_se.avg.last_update_time = 0;
+#endif
+	// attach_task_vip_rq(p);		// TODO
+}
+
+void task_change_group_vip(struct task_struct *p, int type)
+{
+	switch (type) {
+	case TASK_SET_GROUP:
+		task_set_group_vip(p);
+		break;
+
+	case TASK_MOVE_GROUP:
+		task_move_group_vip(p);
+		break;
+	}
+}
+
+void free_vip_sched_group(struct task_group *tg)
+{
+	int i;
+
+	destroy_vip_bandwidth(tg_vip_bandwidth(tg));
+
+	for_each_possible_cpu(i) {
+		if (tg->vip_rq)
+			kfree(tg->vip_rq[i]);
+		if (tg->vip_se)
+			kfree(tg->vip[i]);
+	}
+
+	kfree(tg->vip_rq);
+	kfree(tg->vip);
+}
+
+// cgroup接口 
 int alloc_vip_sched_group(struct task_group *tg, struct task_group *parent)
 {
 	struct sched_entity *vip_se;
@@ -1672,9 +1756,9 @@ int alloc_vip_sched_group(struct task_group *tg, struct task_group *parent)
 	if (!tg->vip)
 		goto err;
 
-	tg->shares = NICE_0_LOAD;
+	tg->vip_shares = NICE_0_LOAD;
 
-	// init_vip_bandwidth(tg_vip_bandwidth(tg));		// TODO
+	init_vip_bandwidth(tg_vip_bandwidth(tg));
 
 	for_each_possible_cpu(i) {
 		vip_rq = kzalloc_node(sizeof(struct vip_rq),
@@ -1700,7 +1784,9 @@ err:
 	return 0;
 }
 
-// 组调度里初始化的调度实体vip_se的vip_rq成员指向系统中per-CPU变量rq的VIP调度队列，my_q 成员指向组调度(task_group)里自身的VIP调度队列
+// 初始化task_group中对应的vip(_se)和vip_rq
+// 组调度里初始化的调度实体vip_se的vip_rq成员指向 系统中per-CPU变量rq的VIP调度队列(group se所在队列)，my_q 成员指向组调度(task_group)里自身的VIP调度队列
+// sched_init() alloc_vip_sched_group调用
 void init_tg_vip_entry(struct task_group *tg, struct vip_rq *vip_rq,
 			struct sched_entity *vip_se, int cpu,
 			struct sched_entity *parent)
@@ -1719,7 +1805,7 @@ void init_tg_vip_entry(struct task_group *tg, struct vip_rq *vip_rq,
 		return;
 
 	if (!parent) {
-		vip_se->vip_rq = &rq->vip;
+		vip_se->vip_rq = &rq->vip_rq;
 		vip_se->depth = 0;
 	} else {
 		vip_se->vip_rq = parent->my_q;
@@ -1730,6 +1816,45 @@ void init_tg_vip_entry(struct task_group *tg, struct vip_rq *vip_rq,
 	/* guarantee group entities always have weight */
 	update_load_set(&vip_se->load, NICE_0_LOAD);
 	vip_se->parent = parent;
+}
+
+static DEFINE_MUTEX(vip_shares_mutex);
+
+int sched_group_set_vip_shares(struct task_group *tg, unsigned long vip_shares)
+{
+	int i;
+
+	/*
+	 * We can't change the weight of the root cgroup.
+	 */
+	if (!tg->vip[0])
+		return -EINVAL;
+
+	vip_shares = clamp(vip_shares, scale_load(MIN_SHARES), scale_load(MAX_SHARES));
+
+	mutex_lock(&vip_shares_mutex);
+	if (tg->vip_shares == vip_shares)
+		goto done;
+
+	tg->vip_shares = vip_shares;
+	for_each_possible_cpu(i) {
+		struct rq *rq = cpu_rq(i);
+		struct sched_entity *vip_se = tg->vip[i];
+		struct rq_flags rf;
+
+		/* Propagate contribution to hierarchy */
+		rq_lock_irqsave(rq, &rf);
+		update_rq_clock(rq);
+		for_each_sched_entity(vip_se) {
+			// update_load_avg(vip_rq_of(vipse), vip_se, UPDATE_TG);		// TODO
+			update_vip_group(vip_se);	// TODO
+		}
+		rq_unlock_irqrestore(rq, &rf);
+	}
+
+done:
+	mutex_unlock(&shares_mutex);
+	return 0;
 }
 
 #else /* CONFIG_VIP_GROUP_SCHED */
@@ -1785,7 +1910,7 @@ const struct sched_class vip_sched_class = {
 	.update_curr		= update_curr_vip,		// 更新当前运行任务的 vruntime & viprq的min_vruntime
 
 #ifdef CONFIG_VIP_GROUP_SCHED
-	.task_change_group	= task_change_group_fair,
+	.task_change_group	= task_change_group_vip,
 #endif
 
 // #ifdef CONFIG_UCLAMP_TASK

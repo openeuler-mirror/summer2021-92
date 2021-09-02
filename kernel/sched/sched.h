@@ -1539,7 +1539,7 @@ static inline struct task_group *task_group(struct task_struct *p)
 /* Change a task's cfs_rq and parent entity if it moves across CPUs/groups */
 static inline void set_task_rq(struct task_struct *p, unsigned int cpu)
 {
-#if defined(CONFIG_FAIR_GROUP_SCHED) || defined(CONFIG_RT_GROUP_SCHED)
+#if defined(CONFIG_FAIR_GROUP_SCHED) || defined(CONFIG_RT_GROUP_SCHED) || defined(CONFIG_VIP_GROUP_SCHED)
 	struct task_group *tg = task_group(p);
 #endif
 
@@ -1547,6 +1547,12 @@ static inline void set_task_rq(struct task_struct *p, unsigned int cpu)
 	set_task_rq_fair(&p->se, p->se.cfs_rq, tg->cfs_rq[cpu]);
 	p->se.cfs_rq = tg->cfs_rq[cpu];
 	p->se.parent = tg->se[cpu];
+#endif
+
+#ifdef CONFIG_VIP_GROUP_SCHED
+	// set_task_rq_vip(&p->vip_se, p->vip_se.vip_rq, tg->vip_rq[cpu]);		// TODO
+	p->vip_se.vip_rq = tg->vip_rq[cpu];
+	p->vip_se.parent = tg->vip[cpu];
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
