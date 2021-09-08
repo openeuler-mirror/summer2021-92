@@ -6712,7 +6712,7 @@ void __init sched_init(void)
 		per_cpu(load_balance_mask, i) = (cpumask_var_t)kzalloc_node(
 			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
 #ifdef CONFIG_VIP_SCHED
-		per_cpu(vip_load_balance_mask, i) = (cpumask_var_t)kzalloc_node(		// TODO vip_load_balance_mask
+		per_cpu(vip_load_balance_mask, i) = (cpumask_var_t)kzalloc_node(
 			cpumask_size(), GFP_KERNEL, cpu_to_node(i));
 #endif
 		per_cpu(select_idle_mask, i) = (cpumask_var_t)kzalloc_node(
@@ -6723,9 +6723,6 @@ void __init sched_init(void)
 	
 	init_rt_bandwidth(&def_rt_bandwidth, global_rt_period(), global_rt_runtime());
 	init_dl_bandwidth(&def_dl_bandwidth, global_rt_period(), global_rt_runtime());
-#ifdef CONFIG_VIP_SCHED
-	// init_vip_bandwidth(&def_vip_bandwidth, global_vip_period(), global_vip_runtime());		// TODO	Same as RT's.
-#endif
 
 #ifdef CONFIG_SMP
 	init_defrootdomain();		// 初始化调度域根域(root domain)，并初始化max_cpu_capacity结构体，update_cpu_capacity时候会被使用到
@@ -6761,23 +6758,23 @@ void __init sched_init(void)
 		init_dl_rq(&rq->dl);
 #ifdef  CONFIG_VIP_SCHED
 		rq->vip_nr_running = 0;
-		rq->vip_blocked_clock = 0;		// TODO
-		rq->do_lb = 0;				// TODO 
+		// rq->vip_blocked_clock = 0;		// TODO
+		// rq->do_lb = 0;				// TODO 
 		init_vip_rq(&rq->vip);		// vip.c - 初始化vip_rq的红黑树
 #endif
 
-/*
- * CFS的组调度(group_sched)，可以通过cpu cgroup来对CFS进行进行控制
- * 可以通过cpu.shares来提供group之间的CPU比例控制(让不同的cgroup按照对应
- * 的比例来分享CPU)，也可以通过cpu.cfs_quota_us来进行配额设定(与RT的
- * 带宽控制类似)。CFS group_sched带宽控制是容器实现的基础底层技术之一
- *
- * root_task_group 是默认的根task_group，其他的cpu cgroup都会以它做为
- * parent或者ancestor。这里的初始化将root_task_group与rq的cfs运行队列
- * 关联起来，这里做的很有意思，直接将root_task_group->cfs_rq[cpu] = &rq->cfs
- * 这样在cpu cgroup根下的进程或者cgroup tg的sched_entity会直接加入到rq->cfs
- * 队列里，可以减少一层查找开销。
- */
+		/*
+		* CFS的组调度(group_sched)，可以通过cpu cgroup来对CFS进行进行控制
+		* 可以通过cpu.shares来提供group之间的CPU比例控制(让不同的cgroup按照对应
+		* 的比例来分享CPU)，也可以通过cpu.cfs_quota_us来进行配额设定(与RT的
+		* 带宽控制类似)。CFS group_sched带宽控制是容器实现的基础底层技术之一
+		*
+		* root_task_group 是默认的根task_group，其他的cpu cgroup都会以它做为
+		* parent或者ancestor。这里的初始化将root_task_group与rq的cfs运行队列
+		* 关联起来，这里做的很有意思，直接将root_task_group->cfs_rq[cpu] = &rq->cfs
+		* 这样在cpu cgroup根下的进程或者cgroup tg的sched_entity会直接加入到rq->cfs
+		* 队列里，可以减少一层查找开销。
+		*/
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
@@ -6815,9 +6812,9 @@ void __init sched_init(void)
 		init_tg_vip_entry(&root_task_group, &rq->vip, NULL, i, NULL);
 #endif /* CONFIG_VIP_GROUP_SCHED */
 
-// #ifdef CONFIG_VIP_SCHED		// For like RT things
-// 		rq->vip.vip_runtime = def_vip_bandwidth.vip_runtime;
-// #endif
+#ifdef CONFIG_VIP_SCHED		// For like RT things
+		rq->vip.vip_runtime = def_vip_bandwidth.runtime;
+#endif
 
 		// 初始化rt可以运行的时间，默认值为950ms
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
@@ -6838,20 +6835,20 @@ void __init sched_init(void)
 		rq->avg_idle = 2*sysctl_sched_migration_cost;
 		rq->max_idle_balance_cost = sysctl_sched_migration_cost;
 #ifdef CONFIG_VIP_SCHED		// TODO
-		rq->active_balance_vip = 0;
-		rq->next_balance_vip = jiffies + 1;
-		rq->push_cpu_vip = 0;
-		rq->idle_vip_stamp = 0;
-		rq->avg_idle_vip = 2*sysctl_sched_migration_cost;
+		// rq->active_balance_vip = 0;
+		// rq->next_balance_vip = jiffies + 1;
+		// rq->push_cpu_vip = 0;
+		// rq->idle_vip_stamp = 0;
+		// rq->avg_idle_vip = 2*sysctl_sched_migration_cost;
 		INIT_LIST_HEAD(&rq->vip_tasks);
 #endif
 		INIT_LIST_HEAD(&rq->cfs_tasks);
 
 		rq_attach_root(rq, &def_root_domain);
 #ifdef CONFIG_NO_HZ_COMMON
-#ifdef CONFIG_VIP_SCHED		// TODO
-		rq->last_vip_load_update_tick = jiffies;
-#else
+// #ifdef CONFIG_VIP_SCHED		// TODO
+// 		rq->last_vip_load_update_tick = jiffies;
+// #else
 		rq->last_load_update_tick = jiffies;
 #endif
 // TODO What about here
@@ -6887,9 +6884,6 @@ void __init sched_init(void)
 	idle_thread_set_boot_cpu();
 #endif
 	init_sched_fair_class();
-#ifdef CONFIG_VIP_SCHED
-	init_sched_vip_class();			// TODO
-#endif
 
 	init_schedstats();
 
