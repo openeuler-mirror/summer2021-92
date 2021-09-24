@@ -11,7 +11,7 @@
  *  This code tracks the priority of each CPU so that global migration
  *  decisions are easy to calculate.  Each CPU can be in a state as follows:
  *
- *                 (INVALID), IDLE, NORMAL, (VIP), RT1, ... RT99
+ *                 (INVALID), IDLE, NORMAL, VIP1, ... VIP39, RT1, ... RT99
  *
  *  going from the lowest priority to the highest.  CPUs in the INVALID state
  *  are not eligible for routing.  The system maintains this state with
@@ -37,7 +37,7 @@ static int convert_prio(int prio)
 	else if (prio >= MAX_VIP_PRIO)
 		cpupri = CPUPRI_NORMAL;
 	else if (prio >= MAX_RT_PRIO)
-		cpupri = CPUPRI_VIP;
+		cpupri = MAX_VIP_PRIO - prio + 1;
 #else
 	else if (prio >= MAX_RT_PRIO)
 		cpupri = CPUPRI_NORMAL;

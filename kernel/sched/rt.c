@@ -1424,7 +1424,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	 * This test is optimistic, if we get it wrong the load-balancer
 	 * will have to sort it out.
 	 */
-	// 如果满足这些条件(即curr不能迁移)，则找一个空闲的CPU给新唤醒的任务(p)
+	// 如果满足这些条件(即CPU不是idle 当前任务是rt curr不能迁移或新进程优先级比目前CPU上任务优先级低)，则找一个空闲的CPU给新唤醒的任务(p)
 	if (curr && unlikely(rt_task(curr)) &&
 	    (curr->nr_cpus_allowed < 2 ||
 	     curr->prio <= p->prio)) {
@@ -1642,6 +1642,7 @@ static int find_lowest_rq(struct task_struct *task)
 	if (unlikely(!lowest_mask))
 		return -1;
 
+	// task本身限制，不予迁移
 	if (task->nr_cpus_allowed == 1)
 		return -1; /* No other targets possible */
 
@@ -1656,6 +1657,7 @@ static int find_lowest_rq(struct task_struct *task)
 	 * We prioritize the last CPU that the task executed on since
 	 * it is most likely cache-hot in that location.
 	 */
+	// 优先考虑来选择task之前在的CPU，减少对CPU cache的干扰
 	if (cpumask_test_cpu(cpu, lowest_mask))
 		return cpu;
 
@@ -1663,6 +1665,7 @@ static int find_lowest_rq(struct task_struct *task)
 	 * Otherwise, we consult the sched_domains span maps to figure
 	 * out which CPU is logically closest to our hot cache data.
 	 */
+    // 找一个逻辑距离最近且cache相关的CPU
 	if (!cpumask_test_cpu(this_cpu, lowest_mask))
 		this_cpu = -1; /* Skip this_cpu opt if not among lowest */
 
@@ -1675,6 +1678,7 @@ static int find_lowest_rq(struct task_struct *task)
 			 * "this_cpu" is cheaper to preempt than a
 			 * remote processor.
 			 */
+            // 为了减少对CPU cache的干扰，抢占一个其他CPU成本高于找到的逻辑距离最近且cache相关的CPU
 			if (this_cpu != -1 &&
 			    cpumask_test_cpu(this_cpu, sched_domain_span(sd))) {
 				rcu_read_unlock();

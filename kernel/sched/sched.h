@@ -394,7 +394,7 @@ struct task_group {
 	struct vip_rq **vip_rq;
 	unsigned long vip_shares;
 
-	// atomic64_t vip_load_avg;		// TODO
+	atomic64_t vip_load_avg;		
 	
 	struct vip_bandwidth	vip_bandwidth;	// VIP进程占用CPU时间的带宽（或者说比例）
 #endif

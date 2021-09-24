@@ -38,9 +38,18 @@ struct vip_bandwidth {
 
 struct vip_rq {
 	struct load_weight load;
-	// unsigned long		runnable_weight;
+	unsigned long		runnable_weight;
 	unsigned int nr_running, h_nr_running;
 	unsigned long nr_uninterruptible;
+
+// select rq of CPU with fork/wake_up
+#if defined CONFIG_SMP || defined CONFIG_VIP_GROUP_SCHED
+	struct {
+		int		curr; /* highest queued vip task prio */
+#ifdef CONFIG_SMP
+		int		next; /* next highest */
+#endif
+	} highest_prio;
 
 	u64 exec_clock;
 	u64 min_vruntime;
@@ -49,7 +58,7 @@ struct vip_rq {
 #endif
 
 	struct rb_root_cached tasks_timeline;
-	struct rb_node *rb_leftmost;		// ?? TODO -- Necessary?
+	struct rb_node *rb_leftmost;		
 
 	/*
 	 * 'curr' points to currently running entity on this vip_rq.

@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
 #ifdef CONFIG_VIP_SCHED
-#define CPUPRI_NR_PRIORITIES	(MAX_RT_PRIO + 3)
+#define CPUPRI_NR_PRIORITIES	(MAX_RT_PRIO + 42)		// MAX_RT_PRIO: RT, 40: VIP, 2: IDLE CFS
 
 #define CPUPRI_INVALID		-1
 #define CPUPRI_IDLE		 	 0
 #define CPUPRI_NORMAL		 1
-#define CPUPRI_VIP			 2
-/* values 3-102 are RT priorities 0-99 */
+// CPUPRI_VIP: 3-42			 
+/* values 43-102 are RT priorities 0-99 */
 
 #else
 #define CPUPRI_NR_PRIORITIES	(MAX_RT_PRIO + 2)

@@ -309,7 +309,7 @@ static void update_curr_vip(struct vip_rq *vip_rq)
 	schedstat_add(vip_rq->exec_clock, delta_exec);
 
 	curr->vruntime += calc_delta_vip(delta_exec, curr);		// 填入特定参数调用__calc_delta来更新当前调度实体虚拟时间
-	update_vip_min_vruntime(vip_rq);		// TODO
+	update_vip_min_vruntime(vip_rq);		
 
 	curr->exec_start = now;
 
@@ -1132,7 +1132,7 @@ static int find_lowest_rq_vip(struct task_struct *task)
 		return -1; /* No other targets possible */
 
 	if (!cpupri_find(&task_rq(task)->rd->cpupri, task, lowest_mask))
-		return -1; /* No targets found */
+		return -1; 
 
 	/*
 	 * At this point we have built a mask of CPUs representing the
@@ -1230,16 +1230,12 @@ select_task_rq_vip(struct task_struct *p, int cpu, int sd_flag, int flags)
 	 * This test is optimistic, if we get it wrong the load-balancer
 	 * will have to sort it out.
 	 */
-	// 如果满足这些条件(即curr不能迁移)，则找一个空闲的CPU给新唤醒的任务(p)
+	// 即CPU不是idle且当前任务是vip且curr不能迁移或新进程优先级比目前CPU上任务优先级低
 	if (curr && unlikely(vip_task(curr)) &&
 	    (curr->nr_cpus_allowed < 2 ||
 	     curr->prio <= p->prio)) {
 		int target = find_lowest_rq_vip(p);
 
-		/*
-		 * Don't bother moving it if the destination CPU is
-		 * not running a lower priority task.
-		 */
 		if (target != -1 &&
 		    p->prio < cpu_rq(target)->vip.highest_prio.curr)
 			cpu = target;

@@ -4320,7 +4320,7 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
 /**************************************************
  * CFS bandwidth control machinery
  */
-
+wake_up_process
 #ifdef CONFIG_CFS_BANDWIDTH
 
 #ifdef CONFIG_JUMP_LABEL
