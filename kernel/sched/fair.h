@@ -10,6 +10,10 @@
 #define _FAIR_H
 
 extern unsigned int sched_nr_latency;
+extern unsigned int sysctl_sched_latency;
+extern unsigned int sysctl_sched_min_granularity;
+extern unsigned int sysctl_sched_wakeup_granularity;
+extern unsigned int sysctl_sched_child_runs_first;
 
 static inline u64 max_vruntime(u64 max_vruntime, u64 vruntime)
 {

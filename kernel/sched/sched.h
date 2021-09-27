@@ -1550,9 +1550,9 @@ static inline void set_task_rq(struct task_struct *p, unsigned int cpu)
 #endif
 
 #ifdef CONFIG_VIP_GROUP_SCHED
-	// set_task_rq_vip(&p->vip_se, p->vip_se.vip_rq, tg->vip_rq[cpu]);		// TODO
-	p->vip_se.vip_rq = tg->vip_rq[cpu];
-	p->vip_se.parent = tg->vip[cpu];
+	set_task_rq_vip(&p->vip, p->vip.vip_rq, tg->vip_rq[cpu]);
+	p->vip.vip_rq = tg->vip_rq[cpu];
+	p->vip.parent = tg->vip[cpu];
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED

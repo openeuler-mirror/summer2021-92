@@ -1324,9 +1324,13 @@ static inline void dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 
 void activate_task(struct rq *rq, struct task_struct *p, int flags)
 {
-	if (task_contributes_to_load(p))
+	if (task_contributes_to_load(p)) {
 		rq->nr_uninterruptible--;
-// TODO: How to handle vip.nr_uninterruptible--
+		
+		if (task_has_vip_policy(p)) {
+			p->vip.vip_rq.nr_uninterruptible--;
+		}
+	}
 	enqueue_task(rq, p, flags);
 
 	p->on_rq = TASK_ON_RQ_QUEUED;
@@ -1338,9 +1342,10 @@ void deactivate_task(struct rq *rq, struct task_struct *p, int flags)
 
 	if (task_contributes_to_load(p)) {
 		rq->nr_uninterruptible++;
-// TODO: How to handle vip.nr_uninterruptible++
-
-		if ()
+		
+		if (task_has_vip_policy(p)) {
+			p->vip.vip_rq.nr_uninterruptible++;
+		}
 	}
 
 	dequeue_task(rq, p, flags);
@@ -1412,7 +1417,6 @@ inline int task_curr(const struct task_struct *p)
  * this means any call to check_class_changed() must be followed by a call to
  * balance_callback().
  */
- // TODO How to understand
 static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 				       const struct sched_class *prev_class,
 				       int oldprio)
@@ -2711,7 +2715,7 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->vip.prev_sum_exec_runtime	= 0;
 	p->vip.nr_migrations		= 0;
 	p->vip.vruntime			= 0;
-	INIT_LIST_HEAD(&p->vip_se.group_node);
+	INIT_LIST_HEAD(&p->vip.group_node);
 #endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -2719,7 +2723,7 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 #endif
 
 #ifdef CONFIG_VIP_GROUP_SCHED
-	p->vip_se.vip_rq		= NULL;
+	p->vip.vip_rq		= NULL;
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
